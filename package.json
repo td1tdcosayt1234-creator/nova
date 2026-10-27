@@ -1,0 +1,22 @@
+{
+  "name": "nova-engine",
+  "productName": "Nova Engine",
+  "version": "0.1.0",
+  "description": "Nova Engine - AI-first 2D & 3D game engine with a full visual editor",
+  "main": "electron/main.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "start": "node build.mjs && electron ."
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "electron": "^33.2.0",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}
