@@ -1,7 +1,6 @@
 /* ============ Nova Engine — UI construction (menus, panels, modals) ============ */
 
 import { PROVIDER_INFO, loadAISettings, saveAISettings, testConnection, type AISettings, type ProviderKind } from './ai/providers'
-import { TEMPLATES } from './ai/localgen'
 
 export interface MenuItem { label?: string; hint?: string; sep?: boolean; action?: () => void }
 
@@ -382,7 +381,7 @@ self.onCollide(function (other) {
     <h4>Physics</h4>
     <p>2D: AABB, y-up. Movers vs statics resolve hoy; landing hole <code>self.onGround = true</code>. Jump: <code>self.vel.y = 620</code>. Sensor bodies shudhu event dey, push kore na. 3D: ground plane y=0 always solid; sphere approx collisions.</p>
     <h4>AI Builder</h4>
-    <p>Prompt likhe Generate chapo. LLM configured thakle full AI generation hoy, na thakle built-in <b>NovaAI offline</b> template engine chole (keyword matching + procedural level gen). Template chips diye instant generate koro.</p>
+    <p>Prompt likhe Generate chapo. LLM configured thakle full AI generation hoy, na thakle built-in <b>NovaAI offline</b> procedural generator chole — prompt theke intent (genre · theme · difficulty · counts) parse kore seed-varied notun game synthesize kore. Kono canned template nei — same prompt-o protibar alada game banay. IDEA chips gulo prompt idea fill kore generate trigger kore.</p>
     <h4>Shortcuts</h4>
     <p><code>Del</code> delete entity · <code>Ctrl+D</code> duplicate · <code>Ctrl+S</code> save · RMB drag = orbit/pan · Wheel = zoom</p>
   </div>`
@@ -417,16 +416,9 @@ export function showWelcome(hasAutosave: boolean, onPick: (key: string) => void)
 
   addCard('🤖', 'AI Builder', 'Describe a game in your own words', 'builder')
   if (hasAutosave) addCard('💾', 'Continue', 'Load your last autosaved scene', 'continue')
-  addCard('🏃', 'Platformer', 'Instant playable platformer', 'platformer')
-  addCard('🚀', 'Space Shooter', 'Blast enemy waves', 'shooter')
-  addCard('💎', '3D Explorer', 'Collect gems in 3D', 'explorer3d')
-  addCard('🐦', 'Flappy', 'Tap through pipes', 'flappy')
-  addCard('🧱', 'Breakout', 'Smash the bricks', 'breakout')
-  addCard('🦖', 'Runner', 'Endless jump & dodge', 'runner')
-  addCard('⬜', 'Empty 2D', 'Start from scratch', 'empty2d')
-  addCard('🔲', 'Empty 3D', 'Blank 3D scene', 'empty3d')
+  addCard('⬜', 'Blank 2D', 'Start from scratch in 2D', 'blank2d')
+  addCard('🔲', 'Blank 3D', 'Blank 3D scene', 'blank3d')
 
   const foot = el('div', 'wfoot', w)
-  const tkeys = Object.keys(TEMPLATES).length
-  foot.textContent = `${tkeys} built-in game templates · NovaAI offline generator works with zero configuration`
+  foot.textContent = '100% procedural NovaAI — kono canned template nei, prompt theke notun game synthesize hoy'
 }

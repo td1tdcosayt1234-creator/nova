@@ -1,26 +1,15 @@
-/* ============ Nova Engine — Offline NovaAI: procedural game templates ============ *
- *  Ei generator engine er "built-in AI": prompt/keyword theke full playable
- *  game generate kore (entities + scripts + camera + level layout).
- *  LLM key thakle builder LLM use kore, na thakle eta use hoy.
+/* ============ Nova Engine — NovaAI: procedural game synthesis engine ============ *
+ *  No canned templates. Every prompt is parsed into an intent (genre, theme,
+ *  difficulty, counts, features) and a unique game is synthesized from
+ *  building blocks + seeded variation. Same prompt never makes the same game.
  */
 
 import { mulberry32 } from '../../engine/core'
 import type { EntitySpec, SceneSpec } from '../../engine/spec'
 
 /* ------------------------------------------------------------------ */
-/* Shared script snippets (top-level — used directly in comps)        */
+/* Core script snippets (top-level — used directly in comps)          */
 /* ------------------------------------------------------------------ */
-
-const S_PLAYER_2D = `// Player controller (2D platformer)
-var SP = 240
-if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) self.vel.x = -SP
-else if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.vel.x = SP
-else self.vel.x = 0
-if ((engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")) && self.onGround) {
-  self.vel.y = 660
-  self.burst(8)
-}
-if (self.pos.y < -260) engine.gameOver("You fell!")`
 
 const S_COIN = `// Coin: bob + spin + collect
 self.mem.t = (self.mem.t || 0) + engine.dt
@@ -36,27 +25,6 @@ self.onCollide(function (other) {
   engine.destroy(self)
 })`
 
-const S_ENEMY = `// Enemy: patrol, stompable
-if (self.mem.dir === undefined) self.mem.dir = 1
-if (self.mem.x0 === undefined) self.mem.x0 = self.pos.x - 110
-if (self.mem.x1 === undefined) self.mem.x1 = self.pos.x + 110
-if (self.pos.x > self.mem.x1) self.mem.dir = -1
-if (self.pos.x < self.mem.x0) self.mem.dir = 1
-self.vel.x = 55 * self.mem.dir
-self.onCollide(function (other) {
-  if (!other.has("player")) return
-  if (other.pos.y > self.pos.y + 12) {
-    engine.score += 2
-    var s = engine.find("Score")
-    if (s) s.setText("Score: " + engine.score)
-    self.burst(16)
-    engine.destroy(self)
-    engine.camera.shake(6, 0.25)
-  } else {
-    engine.gameOver("Caught by an enemy!")
-  }
-})`
-
 const S_GOAL = `// Goal flag
 self.rot.z += engine.dt * 50
 self.onCollide(function (other) {
@@ -66,7 +34,7 @@ self.onCollide(function (other) {
 const S_CLOUD = `// Drifting cloud
 if (self.mem.s === undefined) self.mem.s = 6 + Math.random() * 12
 self.pos.x -= self.mem.s * engine.dt
-if (self.pos.x < -780) self.pos.x = 1700`
+if (self.pos.x < -820) self.pos.x = 1750`
 
 const S_GEM_3D = `// Gem: spin, bob, proximity pickup
 self.rot.y += engine.dt * 120
@@ -85,24 +53,6 @@ if (p) {
   }
 }`
 
-const S_PLAYER_3D = `// Player controller (3D, camera-relative)
-var S = 7.5
-var yaw = engine.camera.yaw
-var fx = Math.sin(yaw), fz = Math.cos(yaw)
-var rx = -Math.cos(yaw), rz = Math.sin(yaw)
-var f = 0, r = 0
-if (engine.input.down("KeyW") || engine.input.down("ArrowUp")) f += 1
-if (engine.input.down("KeyS") || engine.input.down("ArrowDown")) f -= 1
-if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) r += 1
-if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) r -= 1
-var mx = fx * f + rx * r, mz = fz * f + rz * r
-var l = Math.sqrt(mx * mx + mz * mz)
-if (l > 0) { mx /= l; mz /= l }
-self.vel.x = mx * S
-self.vel.z = mz * S
-if (engine.input.pressed("Space") && self.onGround) self.vel.y = 9.5
-if (self.pos.y < -30) { self.pos.x = 0; self.pos.y = 1.2; self.pos.z = 0; self.vel.y = 0 }`
-
 /* single-line snippets embedded inside other scripts (single-quoted) */
 const L_BULLET = "self.mem.t = (self.mem.t || 0) + engine.dt; if (self.pos.y > 340) engine.destroy(self); self.onCollide(function (o) { if (o.has('enemy')) { engine.score += 1; var s = engine.find('Score'); if (s) s.setText('Score: ' + engine.score); o.burst(14); engine.destroy(o); engine.destroy(self) } })"
 
@@ -112,17 +62,177 @@ const L_PIPE = "if (self.mem.sc === undefined) self.mem.sc = 0; if (self.mem.sc 
 
 const L_HAZARD = "if (self.pos.x < -640) engine.destroy(self); self.onCollide(function (o) { if (o.has('player')) { o.burst(16); engine.gameOver('Crash!') } })"
 
-const L_BRICK = "self.onCollide(function (o) { if (o.has('ball')) { engine.score += 1; var s = engine.find('Score'); if (s) s.setText('Bricks: ' + engine.score + ' / 45'); self.burst(10); engine.destroy(self); if (engine.score >= 45) engine.win('All bricks cleared!') } })"
-
-const L_BALL = "if (self.pos.y < -340) engine.gameOver('Ball lost!')"
-
 const L_TILES = "self.pos.x -= 300 * engine.dt; if (self.pos.x < -900) self.pos.x += 2700"
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                            */
+/* Intent parsing (English + Banglish)                                */
 /* ------------------------------------------------------------------ */
 
-const PALETTE = ['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899', '#06b6d4']
+export type Genre = 'platformer' | 'shooter' | 'flappy' | 'breakout' | 'runner' | 'explorer3d'
+export type ThemeKey = 'space' | 'night' | 'jungle' | 'desert' | 'candy' | 'ocean' | 'neon' | 'classic'
+
+export interface Intent {
+  genre: Genre
+  theme: ThemeKey
+  difficulty: number          // 1..10
+  coins: number | null
+  enemies: number | null
+  gems: number | null
+  doubleJump: boolean
+  movingPlatforms: boolean
+}
+
+export function parseIntent(promptRaw: string, seed: number): Intent {
+  const p = promptRaw.toLowerCase()
+  const r = mulberry32(seed ^ 0x1234abcd)
+  const count = (re: RegExp) => (p.match(re) || []).length
+
+  const scores: Record<Genre, number> = {
+    flappy: count(/flappy|bird|flap|pipe/g) * 3,
+    breakout: count(/breakout|brick|paddle|pong|arkanoid/g) * 3,
+    runner: count(/runner|endless|dino|run\b|scroll/g) * 3,
+    shooter: count(/shoot|invader|galaga|bullet|ship|asteroid|alien wave/g) * 2 + (/\bspace\b/.test(p) ? 1 : 0),
+    explorer3d: count(/3d|fps|first[- ]?person|third[- ]?person|walk|explore|open world/g) * 3,
+    platformer: count(/platform|mario|jump|side[- ]?scroll|flag/g) * 2
+  }
+  let genre: Genre = 'platformer'
+  let best = -1
+  for (const k of Object.keys(scores) as Genre[]) {
+    if (scores[k] > best) { best = scores[k]; genre = k }
+  }
+  if (best <= 0) genre = /\b3d\b|fps/.test(p) ? 'explorer3d' : 'platformer'
+  // explicit mode words override
+  if (/\b3d\b|fps|first person|third person/.test(p)) genre = 'explorer3d'
+  else if (/\b2d\b/.test(p) && (genre === 'explorer3d')) genre = 'platformer'
+
+  const themeScores: Array<[ThemeKey, number]> = [
+    ['space', count(/space|galaxy|cosmic|planet|rocket/g)],
+    ['night', count(/night|raat|dark|midnight|moon/g)],
+    ['jungle', count(/jungle|bon|forest|tree|green/g)],
+    ['desert', count(/desert|sand|sahara|dune/g)],
+    ['candy', count(/candy|misti|sweet|pink|sugar/g)],
+    ['ocean', count(/ocean|samudra|sea|water|aqua|fish/g)],
+    ['neon', count(/neon|cyber|synth|vapor/g)]
+  ]
+  themeScores.sort((a, b) => b[1] - a[1])
+  let theme: ThemeKey = 'classic'
+  if (themeScores[0][1] > 0) theme = themeScores[0][0]
+  else if (genre !== 'explorer3d') {
+    const pool: ThemeKey[] = ['classic', 'night', 'jungle', 'candy', 'ocean', 'neon', 'desert']
+    theme = pool[Math.floor(r() * pool.length)]
+  }
+
+  let difficulty = 5
+  if (/easy|sohoj|sadha|simple|shohoj/.test(p)) difficulty = 3
+  else if (/hard|kothin|insane|extreme|kothin/.test(p)) difficulty = 8
+  else if (/very hard|nightmare/.test(p)) difficulty = 9
+  else {
+    const m = p.match(/difficulty (\d+)|(\d+)\/10/)
+    if (m) difficulty = Math.max(1, Math.min(10, parseInt(m[1] || m[2])))
+  }
+
+  const num = (re: RegExp): number | null => {
+    const m = p.match(re)
+    if (!m) return null
+    const n = parseInt(m[1])
+    return Number.isFinite(n) ? Math.min(60, n) : null
+  }
+
+  return {
+    genre,
+    theme,
+    difficulty,
+    coins: num(/(\d+) (?:ta )?(coin|coins)/),
+    enemies: num(/(\d+) (?:ta )?(enemy|enemies|monster|monsters)/),
+    gems: num(/(\d+) (?:ta )?(gem|gems)/),
+    doubleJump: /double.?jump|double jump/.test(p),
+    movingPlatforms: /moving|cholonto|chalachol/.test(p)
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Themes                                                             */
+/* ------------------------------------------------------------------ */
+
+interface Theme {
+  label: string
+  bgTop: string
+  bgBottom: string
+  useGradient: boolean
+  groundColor: string
+  groundSprite: string
+  platColors: string[]
+  playerColor: string
+  accent: string
+  particleColor: string
+  starColors?: string[]
+  clouds: boolean
+}
+
+const THEMES: Record<ThemeKey, Theme> = {
+  space: {
+    label: 'Deep Space', bgTop: '#05060f', bgBottom: '#141a33', useGradient: true,
+    groundColor: '#1e293b', groundSprite: 'brick',
+    platColors: ['#0e7490', '#155e75', '#3b82f6', '#6366f1'],
+    playerColor: '#22d3ee', accent: '#22d3ee', particleColor: '#22d3ee',
+    starColors: ['#ffffff', '#cbd5e1', '#94a3b8', '#e2e8f0'],
+    clouds: false
+  },
+  night: {
+    label: 'Midnight', bgTop: '#0a0a23', bgBottom: '#2b2d5e', useGradient: true,
+    groundColor: '#312e5e', groundSprite: 'brick',
+    platColors: ['#4c1d95', '#6d28d9', '#312e81', '#7c3aed'],
+    playerColor: '#a78bfa', accent: '#a78bfa', particleColor: '#fbbf24',
+    starColors: ['#e0e7ff', '#a5b4fc', '#818cf8'],
+    clouds: true
+  },
+  jungle: {
+    label: 'Jungle', bgTop: '#052e1a', bgBottom: '#3f8a4a', useGradient: true,
+    groundColor: '#2e4a33', groundSprite: 'brick',
+    platColors: ['#16a34a', '#15803d', '#a16207', '#84cc16'],
+    playerColor: '#ef476f', accent: '#34d399', particleColor: '#86efac',
+    clouds: true
+  },
+  desert: {
+    label: 'Desert', bgTop: '#c2711d', bgBottom: '#fde68a', useGradient: true,
+    groundColor: '#b45309', groundSprite: 'brick',
+    platColors: ['#d97706', '#b45309', '#92400e', '#f59e0b'],
+    playerColor: '#7c2d12', accent: '#f59e0b', particleColor: '#fcd34d',
+    clouds: false
+  },
+  candy: {
+    label: 'Candy World', bgTop: '#f0abfc', bgBottom: '#fecdd3', useGradient: true,
+    groundColor: '#ec4899', groundSprite: 'brick',
+    platColors: ['#ec4899', '#f472b6', '#a855f7', '#fda4af'],
+    playerColor: '#7c3aed', accent: '#f472b6', particleColor: '#fbcfe8',
+    clouds: true
+  },
+  ocean: {
+    label: 'Ocean', bgTop: '#0c4a6e', bgBottom: '#7dd3fc', useGradient: true,
+    groundColor: '#0e7490', groundSprite: 'brick',
+    platColors: ['#0891b2', '#0e7490', '#06b6d4', '#38bdf8'],
+    playerColor: '#fbbf24', accent: '#38bdf8', particleColor: '#7dd3fc',
+    clouds: true
+  },
+  neon: {
+    label: 'Neon City', bgTop: '#0f0c29', bgBottom: '#302b63', useGradient: true,
+    groundColor: '#1e1b4b', groundSprite: 'brick',
+    platColors: ['#ec4899', '#8b5cf6', '#06b6d4', '#f59e0b'],
+    playerColor: '#f0abfc', accent: '#f0abfc', particleColor: '#f0abfc',
+    clouds: false
+  },
+  classic: {
+    label: 'Classic', bgTop: '#101a3a', bgBottom: '#3b5f8a', useGradient: true,
+    groundColor: '#2e4a33', groundSprite: 'brick',
+    platColors: ['#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#3b82f6'],
+    playerColor: '#ef476f', accent: '#7c5cff', particleColor: '#fbbf24',
+    clouds: true
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Building blocks                                                    */
+/* ------------------------------------------------------------------ */
 
 function coin2D(x: number, y: number, seed: number): EntitySpec {
   return {
@@ -145,23 +255,62 @@ function platform(x: number, y: number, w: number, color: string, seed: number):
   }
 }
 
-function groundSeg(x: number, w: number, seed: number): EntitySpec {
+function movingPlatform(x: number, y: number, w: number, color: string, seed: number): EntitySpec {
+  return {
+    name: 'MovingPlatform', tags: ['ground'], pos: [x, y, 1],
+    comps: [
+      { type: 'sprite2d', sprite: 'none', color, w, h: 18, screen: false },
+      { type: 'body2d', isStatic: true, w, h: 18 },
+      {
+        type: 'script', code: `// Moving platform: ping-pong horizontally
+if (self.mem.t === undefined) self.mem.t = Math.random() * 6.28
+if (self.mem.x0 === undefined) { self.mem.x0 = self.pos.x - 70; self.mem.x1 = self.pos.x + 70 }
+self.mem.t += engine.dt * 1.6
+var mid = (self.mem.x0 + self.mem.x1) / 2
+self.pos.x = mid + Math.sin(self.mem.t) * (self.mem.x1 - mid)`
+      }
+    ]
+  }
+}
+
+function groundSeg(x: number, w: number, theme: Theme, seed: number): EntitySpec {
   return {
     name: 'Ground', tags: ['ground'], pos: [x, -40, 1],
     comps: [
-      { type: 'sprite2d', sprite: 'brick', color: '#2e4a33', w, h: 80, seed, screen: false },
+      { type: 'sprite2d', sprite: theme.groundSprite, color: theme.groundColor, w, h: 80, seed, screen: false },
       { type: 'body2d', isStatic: true, w, h: 80 }
     ]
   }
 }
 
-function enemyPatrol(x: number, y: number, seed: number): EntitySpec {
+function enemyPatrol(x: number, y: number, speed: number, seed: number): EntitySpec {
   return {
     name: 'Enemy', tags: ['enemy'], pos: [x, y, 3],
     comps: [
       { type: 'sprite2d', sprite: 'enemy', w: 34, h: 34, seed, color: '#ef4444', screen: false },
       { type: 'body2d', gravityScale: 1, w: 30, h: 30 },
-      { type: 'script', code: S_ENEMY }
+      {
+        type: 'script', code: `// Enemy: patrol, stompable
+if (self.mem.dir === undefined) self.mem.dir = 1
+if (self.mem.x0 === undefined) self.mem.x0 = self.pos.x - 110
+if (self.mem.x1 === undefined) self.mem.x1 = self.pos.x + 110
+if (self.pos.x > self.mem.x1) self.mem.dir = -1
+if (self.pos.x < self.mem.x0) self.mem.dir = 1
+self.vel.x = ${speed} * self.mem.dir
+self.onCollide(function (other) {
+  if (!other.has("player")) return
+  if (other.pos.y > self.pos.y + 12) {
+    engine.score += 2
+    var s = engine.find("Score")
+    if (s) s.setText("Score: " + engine.score)
+    self.burst(16)
+    engine.destroy(self)
+    engine.camera.shake(6, 0.25)
+  } else {
+    engine.gameOver("Caught by an enemy!")
+  }
+})`
+      }
     ]
   }
 }
@@ -173,6 +322,13 @@ function cloud(x: number, y: number, seed: number): EntitySpec {
       { type: 'sprite2d', sprite: 'cloud', w: 130, h: 52, seed, color: '#e2e8f0', screen: false },
       { type: 'script', code: S_CLOUD }
     ]
+  }
+}
+
+function star(x: number, y: number, color: string, size: number): EntitySpec {
+  return {
+    name: 'Star', pos: [x, y, -8],
+    comps: [{ type: 'sprite2d', sprite: 'none', color, w: size, h: size, screen: false }]
   }
 }
 
@@ -221,122 +377,161 @@ function tree3D(x: number, z: number): EntitySpec[] {
   ]
 }
 
-const SUN_3D: EntitySpec = {
-  name: 'Sunlight', pos: [18, 30, 12],
-  comps: [{ type: 'light3d', kind: 'sun', color: '#ffffff', intensity: 1.35, distance: 0 }]
+function playerEntity2D(intent: Intent, theme: Theme, x: number, y: number, seed: number): EntitySpec {
+  const jumpCode = intent.doubleJump
+    ? `var pressed = engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")
+if (self.onGround) self.mem.jumps = 0
+if (pressed && (self.onGround || (self.mem.jumps || 0) < 1)) {
+  self.mem.jumps = (self.mem.jumps || 0) + 1
+  self.vel.y = 660
+  self.burst(8)
+}`
+    : `if ((engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")) && self.onGround) {
+  self.vel.y = 660
+  self.burst(8)
+}`
+  return {
+    name: 'Player', tags: ['player'], pos: [x, y, 4],
+    comps: [
+      { type: 'sprite2d', sprite: 'player', w: 36, h: 46, seed, color: theme.playerColor, screen: false },
+      { type: 'body2d', gravityScale: 1, w: 30, h: 44 },
+      { type: 'particles2d', rate: 0, life: 0.5, speed: 100, spread: 180, size: 5, color: theme.particleColor },
+      {
+        type: 'script', code: `// Player controller (2D platformer)
+var SP = 240
+if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) self.vel.x = -SP
+else if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.vel.x = SP
+else self.vel.x = 0
+${jumpCode}
+if (self.pos.y < -260) engine.gameOver("You fell!")`
+      }
+    ]
+  }
 }
-const SKY_3D: EntitySpec = {
-  name: 'Skylight',
-  comps: [{ type: 'light3d', kind: 'hemisphere', color: '#bfd4ff', intensity: 0.65, distance: 0 }]
+
+function playerEntity3D(x: number, y: number, color: string): EntitySpec {
+  return {
+    name: 'Player', tags: ['player'], pos: [x, y, 0],
+    comps: [
+      { type: 'mesh3d', geo: 'capsule', color, texture: 'none', wire: false },
+      { type: 'rigid3d', gravityScale: 1, radius: 0.7 },
+      {
+        type: 'script', code: `// Player controller (3D, camera-relative)
+var S = 7.5
+var yaw = engine.camera.yaw
+var fx = Math.sin(yaw), fz = Math.cos(yaw)
+var rx = -Math.cos(yaw), rz = Math.sin(yaw)
+var f = 0, r = 0
+if (engine.input.down("KeyW") || engine.input.down("ArrowUp")) f += 1
+if (engine.input.down("KeyS") || engine.input.down("ArrowDown")) f -= 1
+if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) r += 1
+if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) r -= 1
+var mx = fx * f + rx * r, mz = fz * f + rz * r
+var l = Math.sqrt(mx * mx + mz * mz)
+if (l > 0) { mx /= l; mz /= l }
+self.vel.x = mx * S
+self.vel.z = mz * S
+if (engine.input.pressed("Space") && self.onGround) self.vel.y = 9.5
+if (self.pos.y < -30) { self.pos.x = 0; self.pos.y = 1.2; self.pos.z = 0; self.vel.y = 0 }`
+      }
+    ]
+  }
 }
 
 /* ------------------------------------------------------------------ */
-/* Templates                                                          */
+/* Genre synthesizers — procedural, intent-driven, seed-varied        */
 /* ------------------------------------------------------------------ */
 
-export const TEMPLATES: Record<string, {
-  label: string
-  icon: string
-  mode: '2d' | '3d'
-  hint: string
-  build: (seed: number) => SceneSpec
-}> = {
-  platformer: {
-    label: 'Platformer', icon: '🏃', mode: '2d',
-    hint: 'Run & jump platformer with coins, stompable enemies and a goal flag.',
-    build(seed) {
-      const r = mulberry32(seed)
+function synthesize(intent: Intent, seed: number): SceneSpec {
+  const th = THEMES[intent.theme]
+  const r = mulberry32(seed)
+  const R = (a: number, b: number) => a + r() * (b - a)
+  const RI = (a: number, b: number) => Math.floor(R(a, b + 1))
+  const diff = intent.difficulty
+
+  switch (intent.genre) {
+    case 'platformer': {
       const E: EntitySpec[] = []
-      const platColor = PALETTE[Math.floor(r() * PALETTE.length)]
+      const segs = 4 + Math.floor(diff / 2) + RI(0, 2)
+      const gapMin = diff <= 4 ? 60 : diff <= 7 ? 75 : 100
+      const gapMax = diff <= 4 ? 110 : diff <= 7 ? 150 : 175
+      const enemySpeed = 40 + diff * 7
 
-      // scrolling ground with gaps
       let cx = -350
-      const segEnds: Array<{ x: number; w: number }> = []
-      for (let i = 0; i < 5; i++) {
-        const w = 480 + Math.floor(r() * 520)
-        E.push(groundSeg(cx + w / 2, w, Math.floor(r() * 9999)))
-        segEnds.push({ x: cx, w })
-        cx += w / 2 + 70 + Math.floor(r() * 80)
-        cx += w / 2
-      }
-      void segEnds
-
-      // floating platforms
-      for (let i = 0; i < 6; i++) {
-        const w = 110 + Math.floor(r() * 120)
-        const x = -250 + r() * (cx + 200)
-        const y = 60 + Math.floor(r() * 50)
-        E.push(platform(x, y, w, platColor, Math.floor(r() * 9999)))
-        E.push(coin2D(x, y + 42, Math.floor(r() * 9999)))
+      let lastEnd = -350
+      for (let i = 0; i < segs; i++) {
+        const w = R(430, 950)
+        E.push(groundSeg(cx + w / 2, w, th, RI(1, 9999)))
+        lastEnd = cx + w / 2 + w / 2
+        cx += w + R(gapMin, gapMax)
       }
 
-      // coins on ground level
-      for (let i = 0; i < 7; i++) {
-        E.push(coin2D(-260 + r() * (cx + 100), 36 + r() * 70, Math.floor(r() * 9999)))
+      // platforms + coins
+      const platCount = 4 + Math.floor(diff) + RI(0, 2)
+      for (let i = 0; i < platCount; i++) {
+        const w = R(110, 240)
+        const x = R(-260, lastEnd + 100)
+        const y = R(60, 115)
+        if (intent.movingPlatforms && r() < 0.35) {
+          E.push(movingPlatform(x, y, w, th.platColors[RI(0, th.platColors.length - 1)], RI(1, 9999)))
+        } else {
+          E.push(platform(x, y, w, th.platColors[RI(0, th.platColors.length - 1)], RI(1, 9999)))
+        }
+        E.push(coin2D(x, y + 42, RI(1, 9999)))
       }
 
-      // enemies
-      for (let i = 0; i < 3; i++) {
-        E.push(enemyPatrol(-180 + r() * (cx - 60), 30, Math.floor(r() * 9999)))
+      const coinTotal = intent.coins ?? (7 + RI(0, 7) + Math.floor(diff / 2))
+      for (let i = 0; i < coinTotal; i++) {
+        E.push(coin2D(R(-300, lastEnd), R(34, 130), RI(1, 9999)))
       }
 
-      // goal
+      const enemyTotal = intent.enemies ?? Math.max(1, Math.floor(diff / 2.5) + RI(1, 3))
+      for (let i = 0; i < enemyTotal; i++) {
+        E.push(enemyPatrol(R(-250, lastEnd - 60), 30, enemySpeed, RI(1, 9999)))
+      }
+
       E.push({
-        name: 'Goal', tags: ['goal'], pos: [cx - 90, 40, 2],
+        name: 'Goal', tags: ['goal'], pos: [lastEnd - 80, 40, 2],
         comps: [
-          { type: 'sprite2d', sprite: 'star', color: '#22c55e', w: 46, h: 46, seed: Math.floor(r() * 9999), screen: false },
+          { type: 'sprite2d', sprite: 'star', color: th.accent, w: 46, h: 46, seed: RI(1, 9999), screen: false },
           { type: 'body2d', isStatic: true, sensor: true, w: 40, h: 46 },
           { type: 'script', code: S_GOAL }
         ]
       })
 
-      // player
-      E.push({
-        name: 'Player', tags: ['player'], pos: [-320, 60, 4],
-        comps: [
-          { type: 'sprite2d', sprite: 'player', w: 36, h: 46, seed: Math.floor(r() * 9999), color: '#ef476f', screen: false },
-          { type: 'body2d', gravityScale: 1, w: 30, h: 44 },
-          { type: 'particles2d', rate: 0, life: 0.5, speed: 100, spread: 180, size: 5, color: '#fbbf24' },
-          { type: 'script', code: S_PLAYER_2D }
-        ]
-      })
+      E.push(playerEntity2D(intent, th, -320, 60, RI(1, 9999)))
 
-      for (let i = 0; i < 5; i++) E.push(cloud(-500 + r() * 2200, 160 + r() * 150, Math.floor(r() * 9999)))
+      if (th.clouds) for (let i = 0; i < 5; i++) E.push(cloud(R(-500, lastEnd + 500), R(150, 320), RI(1, 9999)))
+      if (th.starColors) for (let i = 0; i < 26; i++) E.push(star(R(-600, lastEnd + 600), R(-100, 380), th.starColors[RI(0, th.starColors.length - 1)], R(2, 4)))
 
       E.push(hudText('Score', 'Score: 0'))
-      E.push(hint2D('A/D or ←/→ to move · Space/W to jump'))
+      E.push(hint2D('A/D move · Space jump · stomp enemies · reach the flag!'))
 
       return {
-        name: 'Nova Platformer', mode: '2d',
-        useGradient: true, bgTop: '#101a3a', bgBottom: '#3b5f8a',
+        name: `${th.label} Platformer`, mode: '2d',
+        useGradient: th.useGradient, bgTop: th.bgTop, bgBottom: th.bgBottom,
         gravity2d: 1700,
         camera2d: { zoom: 1, follow: 'Player' },
         entities: E
       }
     }
-  },
 
-  shooter: {
-    label: 'Space Shooter', icon: '🚀', mode: '2d',
-    hint: 'Arrow keys to fly, Space to shoot waves of enemies.',
-    build(seed) {
-      const r = mulberry32(seed)
+    case 'shooter': {
       const E: EntitySpec[] = []
-
-      for (let i = 0; i < 46; i++) {
-        E.push({
-          name: 'Star', pos: [-460 + r() * 920, -310 + r() * 650, -8],
-          comps: [{ type: 'sprite2d', sprite: 'none', color: ['#ffffff', '#cbd5e1', '#94a3b8', '#e2e8f0'][Math.floor(r() * 4)], w: 2 + r() * 2, h: 2 + r() * 2, screen: false }]
-        })
-      }
+      const stars = th.starColors ? 46 : 20
+      const starCols = th.starColors || ['#ffffff', '#cbd5e1', '#94a3b8']
+      for (let i = 0; i < stars; i++) E.push(star(R(-460, 460), R(-310, 330), starCols[RI(0, starCols.length - 1)], R(2, 4)))
+      const waveGap = Math.max(0.7, 2.3 - diff * 0.16)
+      const bulletCool = (0.24 - diff * 0.01).toFixed(2)
 
       E.push({
         name: 'Player', tags: ['player'], pos: [0, -220, 5],
         comps: [
-          { type: 'sprite2d', sprite: 'ship', w: 48, h: 48, seed: Math.floor(r() * 9999), color: '#22d3ee', screen: false },
+          { type: 'sprite2d', sprite: 'ship', w: 48, h: 48, seed: RI(1, 9999), color: th.playerColor, screen: false },
           { type: 'body2d', gravityScale: 0, w: 40, h: 40 },
-          { type: 'particles2d', rate: 0, life: 0.35, speed: 120, spread: 180, size: 4, color: '#22d3ee' },
-          { type: 'script', code: `// Ship controller: fly + fire
+          { type: 'particles2d', rate: 0, life: 0.35, speed: 120, spread: 180, size: 4, color: th.particleColor },
+          {
+            type: 'script', code: `// Ship controller: fly + fire
 var S = 330
 if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) self.vel.x = -S
 else if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.vel.x = S
@@ -348,34 +543,36 @@ self.pos.x = Math.max(-420, Math.min(420, self.pos.x))
 self.pos.y = Math.max(-280, Math.min(310, self.pos.y))
 self.mem.cool = (self.mem.cool || 0) - engine.dt
 if (engine.input.down("Space") && self.mem.cool <= 0) {
-  self.mem.cool = 0.16
+  self.mem.cool = ${bulletCool}
   engine.spawn({
     name: "Bullet", tags: ["bullet"],
     pos: [self.pos.x, self.pos.y + 28, 5],
     comps: [
-      { type: "sprite2d", sprite: "none", color: "#22d3ee", w: 7, h: 20, screen: false },
+      { type: "sprite2d", sprite: "none", color: "${th.accent}", w: 7, h: 20, screen: false },
       { type: "body2d", gravityScale: 0, vy: 560, w: 7, h: 20 },
       { type: "script", code: "${L_BULLET}" }
     ]
   })
   self.burst(3)
-}` }
+}`
+          }
         ]
       })
 
       E.push({
         name: 'Spawner',
-        comps: [{ type: 'script', code: `// Enemy spawner
+        comps: [{
+          type: 'script', code: `// Enemy spawner — waves scale up
 if (self.mem.init === undefined) {
   self.mem.init = 1
   self.mem.t = 0.4
   self.mem.wave = 0
-  for (var i = 0; i < 5; i++) spawnEnemy(-350 + i * 160, 290)
+  for (var i = 0; i < 4; i++) spawnEnemy(-330 + i * 160, 290)
 }
 self.mem.t -= engine.dt
 if (self.mem.t <= 0) {
   self.mem.wave = (self.mem.wave || 0) + 1
-  self.mem.t = Math.max(0.8, 2.2 - self.mem.wave * 0.1)
+  self.mem.t = ${waveGap.toFixed(2)}
   for (var j = 0; j < Math.min(1 + Math.floor(self.mem.wave / 3), 4); j++) spawnEnemy(engine.random(-380, 380), engine.random(240, 310))
 }
 function spawnEnemy(x, y) {
@@ -384,115 +581,125 @@ function spawnEnemy(x, y) {
     pos: [x, y, 3],
     comps: [
       { type: "sprite2d", sprite: "enemy", w: 42, h: 42, seed: Math.floor(Math.random() * 9999), color: "#ef4444", screen: false },
-      { type: "body2d", gravityScale: 0, vy: -55, w: 38, h: 38 },
+      { type: "body2d", gravityScale: 0, vy: ${-(45 + diff * 6)}, w: 38, h: 38 },
       { type: "script", code: "${L_ENEMY_FLY}" }
     ]
   })
-}` }]
+}`
+        }]
       })
 
       E.push(hudText('Score', 'Score: 0'))
-      E.push(hint2D('Arrows/WASD to fly · Space to fire'))
+      E.push(hint2D('Arrows/WASD fly · Space fire'))
 
       return {
-        name: 'Nova Shooter', mode: '2d',
-        useGradient: true, bgTop: '#05060f', bgBottom: '#141a33',
+        name: `${th.label} Shooter`, mode: '2d',
+        useGradient: th.useGradient, bgTop: th.bgTop, bgBottom: th.bgBottom,
         gravity2d: 0,
         camera2d: { zoom: 1, follow: '' },
         entities: E
       }
     }
-  },
 
-  flappy: {
-    label: 'Flappy Bird', icon: '🐦', mode: '2d',
-    hint: 'Space to flap through the gaps.',
-    build(seed) {
-      const r = mulberry32(seed)
+    case 'flappy': {
       const E: EntitySpec[] = []
+      const gapHalf = diff <= 4 ? 85 : diff <= 7 ? 70 : 55
+      const pipeSpeed = 150 + diff * 10
 
       E.push({
         name: 'Bird', tags: ['player'], pos: [-60, 40, 5],
         comps: [
-          { type: 'sprite2d', sprite: 'orb', w: 34, h: 32, seed: Math.floor(r() * 9999), color: '#fbbf24', screen: false },
+          { type: 'sprite2d', sprite: 'orb', w: 34, h: 32, seed: RI(1, 9999), color: th.playerColor, screen: false },
           { type: 'body2d', gravityScale: 1, w: 28, h: 26 },
-          { type: 'script', code: `// Bird: flap
+          {
+            type: 'script', code: `// Bird: flap
 if (engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")) self.vel.y = 430
 self.rot.z = Math.max(-40, Math.min(70, self.vel.y * 0.09))
-if (self.pos.y < -300 || self.pos.y > 340) engine.gameOver("Crashed!")` },
-          { type: 'particles2d', rate: 0, life: 0.3, speed: 60, spread: 180, size: 4, color: '#fbbf24' }
+if (self.pos.y < -300 || self.pos.y > 340) engine.gameOver("Crashed!")`
+          },
+          { type: 'particles2d', rate: 0, life: 0.3, speed: 60, spread: 180, size: 4, color: th.particleColor }
         ]
       })
 
       E.push({
         name: 'PipeSpawner',
-        comps: [{ type: 'script', code: `// Pipe spawner
+        comps: [{
+          type: 'script', code: `// Pipe spawner
 if (self.mem.init === undefined) { self.mem.init = 1; self.mem.t = 0.6 }
 self.mem.t -= engine.dt
 if (self.mem.t <= 0) {
-  self.mem.t = 1.55
+  self.mem.t = ${ (1.7 - diff * 0.06).toFixed(2) }
   var gapY = engine.random(10, 210)
   engine.spawn({
     name: "PipeBottom", tags: ["pipe"],
-    pos: [560, gapY - 190, 3],
+    pos: [560, gapY - ${gapHalf} - 120, 3],
     comps: [
-      { type: "sprite2d", sprite: "none", color: "#22c55e", w: 70, h: 260, screen: false },
-      { type: "body2d", gravityScale: 0, vx: -170, w: 70, h: 260 },
+      { type: "sprite2d", sprite: "none", color: "${th.platColors[0]}", w: 70, h: 260, screen: false },
+      { type: "body2d", gravityScale: 0, vx: ${-pipeSpeed}, w: 70, h: 260 },
       { type: "script", code: "${L_PIPE}" }
     ]
   })
   engine.spawn({
     name: "PipeTop", tags: ["pipe"],
-    pos: [560, gapY + 190, 3],
+    pos: [560, gapY + ${gapHalf} + 120, 3],
     comps: [
-      { type: "sprite2d", sprite: "none", color: "#16a34a", w: 70, h: 260, screen: false },
-      { type: "body2d", gravityScale: 0, vx: -170, w: 70, h: 260 },
+      { type: "sprite2d", sprite: "none", color: "${th.platColors[1]}", w: 70, h: 260, screen: false },
+      { type: "body2d", gravityScale: 0, vx: ${-pipeSpeed}, w: 70, h: 260 },
       { type: "script", code: "${L_PIPE}" }
     ]
   })
-}` }]
+}`
+        }]
       })
 
       E.push({
         name: 'Ground', tags: ['ground'], pos: [0, -330, 1],
         comps: [
-          { type: 'sprite2d', sprite: 'none', color: '#166534', w: 1200, h: 60, screen: false },
+          { type: 'sprite2d', sprite: 'none', color: th.groundColor, w: 1200, h: 60, screen: false },
           { type: 'body2d', isStatic: true, sensor: true, w: 1200, h: 60 }
         ]
       })
 
-      for (let i = 0; i < 4; i++) E.push(cloud(-300 + r() * 1400, 220 + r() * 120, Math.floor(r() * 9999)))
+      if (th.clouds) for (let i = 0; i < 4; i++) E.push(cloud(R(-300, 1100), R(220, 340), RI(1, 9999)))
 
       E.push(hudText('Score', 'Score: 0'))
       E.push(hint2D('Space to flap'))
 
       return {
-        name: 'Nova Flappy', mode: '2d',
-        useGradient: true, bgTop: '#0c4a6e', bgBottom: '#7dd3fc',
+        name: `${th.label} Flappy`, mode: '2d',
+        useGradient: th.useGradient, bgTop: th.bgTop, bgBottom: th.bgBottom,
         gravity2d: 1400,
         camera2d: { zoom: 1, follow: '' },
         entities: E
       }
     }
-  },
 
-  breakout: {
-    label: 'Brick Breaker', icon: '🧱', mode: '2d',
-    hint: 'Move the paddle (mouse or A/D), smash all 45 bricks.',
-    build(seed) {
-      const r = mulberry32(seed)
+    case 'breakout': {
       const E: EntitySpec[] = []
-      const rowColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6']
+      const rows = Math.min(8, 3 + Math.floor(diff / 2))
+      const total = rows * 9
+      const rowColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#06b6d4']
 
-      for (let row = 0; row < 5; row++) {
+      for (let row = 0; row < rows; row++) {
         for (let col = 0; col < 9; col++) {
           E.push({
             name: 'Brick', tags: ['brick'],
             pos: [-262 + col * 66, 260 - row * 32, 2],
             comps: [
-              { type: 'sprite2d', sprite: 'none', color: rowColors[row], w: 60, h: 22, screen: false },
+              { type: 'sprite2d', sprite: 'none', color: rowColors[row % rowColors.length], w: 60, h: 22, screen: false },
               { type: 'body2d', isStatic: true, w: 60, h: 22 },
-              { type: 'script', code: L_BRICK }
+              {
+                type: 'script', code: `self.onCollide(function (o) {
+  if (o.has("ball")) {
+    engine.score += 1
+    var s = engine.find("Score")
+    if (s) s.setText("Bricks: " + engine.score + " / ${total}")
+    self.burst(10)
+    engine.destroy(self)
+    if (engine.score >= ${total}) engine.win("All bricks cleared!")
+  }
+})`
+              }
             ]
           })
         }
@@ -503,11 +710,13 @@ if (self.mem.t <= 0) {
         comps: [
           { type: 'sprite2d', sprite: 'none', color: '#e2e8f0', w: 120, h: 18, screen: false },
           { type: 'body2d', isStatic: true, w: 120, h: 18 },
-          { type: 'script', code: `// Paddle: mouse or keys
+          {
+            type: 'script', code: `// Paddle: mouse or keys
 var mx = engine.input.mouse.wx
 if (engine.input.mouse.inside && mx !== undefined) self.pos.x = Math.max(-268, Math.min(268, mx))
 if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) self.pos.x -= 430 * engine.dt
-if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.pos.x += 430 * engine.dt` }
+if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.pos.x += 430 * engine.dt`
+          }
         ]
       })
 
@@ -515,12 +724,11 @@ if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.pos.x += 
         name: 'Ball', tags: ['ball'], pos: [0, -240, 4],
         comps: [
           { type: 'sprite2d', sprite: 'none', color: '#f8fafc', w: 16, h: 16, screen: false },
-          { type: 'body2d', gravityScale: 0, bounce: 1, vx: 130 + r() * 60, vy: 330, w: 16, h: 16 },
-          { type: 'script', code: L_BALL }
+          { type: 'body2d', gravityScale: 0, bounce: 1, vx: R(110, 190), vy: 280 + diff * 14, w: 16, h: 16 },
+          { type: 'script', code: `if (self.pos.y < -340) engine.gameOver("Ball lost!")` }
         ]
       })
 
-      // walls
       const wall = (name: string, x: number, y: number, w: number, h: number) => E.push({
         name, tags: ['wall'], pos: [x, y, 1],
         comps: [
@@ -532,31 +740,25 @@ if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.pos.x += 
       wall('WallR', 336, 0, 22, 700)
       wall('WallT', 0, 336, 700, 22)
 
-      E.push(hudText('Score', 'Bricks: 0 / 45'))
+      E.push(hudText('Score', `Bricks: 0 / ${total}`))
       E.push(hint2D('Move mouse or A/D'))
 
       return {
-        name: 'Nova Breakout', mode: '2d',
-        useGradient: false, bg: '#0f172a',
+        name: `${th.label} Breakout`, mode: '2d',
+        useGradient: false, bg: th.bgTop,
         gravity2d: 0,
         camera2d: { zoom: 1, follow: '' },
         entities: E
       }
     }
-  },
 
-  runner: {
-    label: 'Endless Runner', icon: '🦖', mode: '2d',
-    hint: 'Auto-runner: Space to jump over obstacles.',
-    build(seed) {
-      const r = mulberry32(seed)
+    case 'runner': {
       const E: EntitySpec[] = []
-
       for (let i = 0; i < 3; i++) {
         E.push({
           name: 'Ground' + i, tags: ['ground'], pos: [-450 + i * 900, -30, 1],
           comps: [
-            { type: 'sprite2d', sprite: 'brick', color: '#334155', w: 900, h: 60, seed: Math.floor(r() * 9999), screen: false },
+            { type: 'sprite2d', sprite: th.groundSprite, color: th.groundColor, w: 900, h: 60, seed: RI(1, 9999), screen: false },
             { type: 'body2d', isStatic: true, w: 900, h: 60 },
             { type: 'script', code: L_TILES }
           ]
@@ -566,32 +768,36 @@ if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.pos.x += 
       E.push({
         name: 'Player', tags: ['player'], pos: [-80, 40, 4],
         comps: [
-          { type: 'sprite2d', sprite: 'player', w: 38, h: 46, seed: Math.floor(r() * 9999), color: '#ef476f', screen: false },
+          { type: 'sprite2d', sprite: 'player', w: 38, h: 46, seed: RI(1, 9999), color: th.playerColor, screen: false },
           { type: 'body2d', gravityScale: 1, w: 30, h: 44 },
-          { type: 'script', code: `// Runner: jump only
+          {
+            type: 'script', code: `// Runner: jump only
 if ((engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")) && self.onGround) {
   self.vel.y = 680
   self.burst(6)
 }
-if (self.pos.y < -260) engine.gameOver("Fell off!")` }
+if (self.pos.y < -260) engine.gameOver("Fell off!")`
+          }
         ]
       })
 
+      const interval = Math.max(0.55, 1.35 - diff * 0.09).toFixed(2)
       E.push({
         name: 'Spawner',
-        comps: [{ type: 'script', code: `// Obstacle spawner + distance score
+        comps: [{
+          type: 'script', code: `// Obstacle spawner + distance score
 if (self.mem.init === undefined) { self.mem.init = 1; self.mem.t = 1.2 }
 self.mem.t -= engine.dt
 var s = engine.find("Score")
 if (s) { engine.score = Math.floor(engine.time * 10); s.setText("Distance: " + Math.floor(engine.time * 10) + "m") }
 if (self.mem.t <= 0) {
-  self.mem.t = 0.9 + Math.random() * 0.8
+  self.mem.t = ${interval} + Math.random() * 0.7
   var tall = Math.random() < 0.3
   engine.spawn({
     name: "Obstacle", tags: ["hazard"],
     pos: [560, tall ? 30 : 18, 3],
     comps: [
-      { type: "sprite2d", sprite: "crate", w: tall ? 34 : 42, h: tall ? 78 : 40, seed: Math.floor(Math.random() * 9999), color: "#b45309", screen: false },
+      { type: "sprite2d", sprite: "crate", w: tall ? 34 : 42, h: tall ? 78 : 40, seed: Math.floor(Math.random() * 9999), color: "${th.groundColor}", screen: false },
       { type: "body2d", isStatic: true, sensor: true, w: tall ? 34 : 42, h: tall ? 78 : 40 },
       { type: "script", code: "${L_HAZARD}" }
     ]
@@ -608,157 +814,125 @@ function spawnCoin() {
       { type: "script", code: "${S_COIN}" }
     ]
   })
-}` }]
+}`
+        }]
       })
 
-      for (let i = 0; i < 4; i++) E.push(cloud(-400 + r() * 1800, 180 + r() * 140, Math.floor(r() * 9999)))
+      if (th.clouds) for (let i = 0; i < 4; i++) E.push(cloud(R(-400, 1400), R(180, 320), RI(1, 9999)))
+      if (th.starColors) for (let i = 0; i < 24; i++) E.push(star(R(-500, 500), R(-50, 380), th.starColors[RI(0, th.starColors.length - 1)], R(2, 4)))
 
       E.push(hudText('Score', 'Distance: 0m'))
       E.push(hint2D('Space to jump'))
 
       return {
-        name: 'Nova Runner', mode: '2d',
-        useGradient: true, bgTop: '#1e1b4b', bgBottom: '#7c3aed',
+        name: `${th.label} Runner`, mode: '2d',
+        useGradient: th.useGradient, bgTop: th.bgTop, bgBottom: th.bgBottom,
         gravity2d: 1800,
         camera2d: { zoom: 1, follow: 'Player' },
         entities: E
       }
     }
-  },
 
-  explorer3d: {
-    label: '3D Gem Explorer', icon: '💎', mode: '3d',
-    hint: 'Third-person 3D: explore, collect 6 gems, avoid crates.',
-    build(seed) {
-      const r = mulberry32(seed)
-      const E: EntitySpec[] = [SUN_3D, SKY_3D]
+    case 'explorer3d': {
+      const E: EntitySpec[] = [
+        { name: 'Sunlight', pos: [18, 30, 12], comps: [{ type: 'light3d', kind: 'sun', color: '#ffffff', intensity: 1.35, distance: 0 }] },
+        { name: 'Skylight', comps: [{ type: 'light3d', kind: 'hemisphere', color: '#bfd4ff', intensity: 0.65, distance: 0 }] }
+      ]
+      const arena = 45 + diff * 3
+      const groundColor = intent.theme === 'jungle' ? '#1f8a4c' : intent.theme === 'desert' ? '#d4a017' : intent.theme === 'space' ? '#1e293b' : intent.theme === 'candy' ? '#f9a8d4' : '#334155'
 
-      E.push({
-        name: 'Ground', pos: [0, 0, 0],
-        comps: [{ type: 'mesh3d', geo: 'plane', color: '#1f8a4c', texture: 'none', wire: false }]
-      })
+      E.push({ name: 'Ground', pos: [0, 0, 0], comps: [{ type: 'mesh3d', geo: 'plane', color: groundColor, texture: 'none', wire: false }] })
+      E.push(playerEntity3D(0, 1.1, th.playerColor))
 
-      E.push({
-        name: 'Player', tags: ['player'], pos: [0, 1.1, 0],
-        comps: [
-          { type: 'mesh3d', geo: 'capsule', color: '#f97316', texture: 'none', wire: false },
-          { type: 'rigid3d', gravityScale: 1, radius: 0.7 },
-          { type: 'script', code: S_PLAYER_3D }
-        ]
-      })
-
+      const gemTotal = intent.gems ?? (5 + Math.floor(diff / 2))
       const spots: Array<[number, number]> = []
-      while (spots.length < 6) {
-        const x = -22 + r() * 44, z = -22 + r() * 44
+      while (spots.length < gemTotal) {
+        const x = R(-arena / 2, arena / 2), z = R(-arena / 2, arena / 2)
         if (Math.abs(x) + Math.abs(z) < 6) continue
         if (spots.some(([sx, sz]) => Math.hypot(sx - x, sz - z) < 7)) continue
         spots.push([x, z])
       }
-      for (const [x, z] of spots) E.push(gem3D(Math.round(x), Math.round(z), Math.floor(r() * 9999)))
+      for (const [x, z] of spots) E.push(gem3D(Math.round(x), Math.round(z), RI(1, 9999)))
 
-      for (let i = 0; i < 5; i++) {
-        E.push(crate3D(Math.round(-20 + r() * 40), Math.round(-20 + r() * 40), Math.floor(r() * 9999)))
+      for (let i = 0; i < 2 + diff; i++) {
+        E.push(crate3D(Math.round(R(-arena / 2, arena / 2)), Math.round(R(-arena / 2, arena / 2)), RI(1, 9999)))
       }
-      for (let i = 0; i < 7; i++) {
-        const x = Math.round(-26 + r() * 52), z = Math.round(-26 + r() * 52)
+      for (let i = 0; i < 6 + RI(0, 4); i++) {
+        const x = Math.round(R(-arena / 2 - 3, arena / 2 + 3)), z = Math.round(R(-arena / 2 - 3, arena / 2 + 3))
         if (Math.abs(x) < 4 && Math.abs(z) < 4) continue
-        E.push(...tree3D(x, z))
+        tree3D(x, z).forEach(sp => E.push(sp))
       }
 
       E.push(hudText('Score', 'Gems: 0'))
-      E.push(hint2D('WASD move (camera-relative) · Space jump · Mouse rotates camera'))
+      E.push(hint2D('WASD move · Space jump · Mouse rotates camera'))
 
       return {
-        name: 'Nova Explorer', mode: '3d',
-        useGradient: true, bgTop: '#0b1026', bgBottom: '#1b2b4a',
+        name: `${th.label} Explorer`, mode: '3d',
+        useGradient: true, bgTop: th.bgTop, bgBottom: th.bgBottom,
         gravity3d: 24,
         camera3d: { mode: 'third', follow: 'Player', fov: 60, dist: 9, height: 3.6 },
         entities: E
       }
     }
-  },
-
-  empty2d: {
-    label: 'Empty 2D', icon: '⬜', mode: '2d',
-    hint: 'Blank 2D scene with ground, player, camera and score HUD.',
-    build() {
-      const E: EntitySpec[] = [
-        groundSeg(0, 1200, 42),
-        {
-          name: 'Player', tags: ['player'], pos: [0, 60, 4],
-          comps: [
-            { type: 'sprite2d', sprite: 'player', w: 36, h: 46, seed: 7, color: '#ef476f', screen: false },
-            { type: 'body2d', gravityScale: 1, w: 30, h: 44 },
-            { type: 'script', code: S_PLAYER_2D }
-          ]
-        },
-        hudText('Score', 'Score: 0'),
-        hint2D('A/D move · Space jump · Select an entity and add Scripts in the Inspector')
-      ]
-      return {
-        name: 'Untitled 2D', mode: '2d', useGradient: true,
-        bgTop: '#101a3a', bgBottom: '#3b5f8a', gravity2d: 1700,
-        camera2d: { zoom: 1, follow: 'Player' },
-        entities: E
-      }
-    }
-  },
-
-  empty3d: {
-    label: 'Empty 3D', icon: '🔲', mode: '3d',
-    hint: 'Blank 3D scene with ground, player capsule, lights and camera.',
-    build() {
-      const E: EntitySpec[] = [
-        SUN_3D, SKY_3D,
-        { name: 'Ground', pos: [0, 0, 0], comps: [{ type: 'mesh3d', geo: 'plane', color: '#334155', texture: 'none', wire: false }] },
-        {
-          name: 'Player', tags: ['player'], pos: [0, 1.1, 0],
-          comps: [
-            { type: 'mesh3d', geo: 'capsule', color: '#f97316', texture: 'none', wire: false },
-            { type: 'rigid3d', gravityScale: 1, radius: 0.7 },
-            { type: 'script', code: S_PLAYER_3D }
-          ]
-        },
-        hudText('Score', 'Score: 0'),
-        hint2D('WASD move · Space jump')
-      ]
-      return {
-        name: 'Untitled 3D', mode: '3d', useGradient: true,
-        bgTop: '#0b1026', bgBottom: '#1b2b4a', gravity3d: 24,
-        camera3d: { mode: 'third', follow: 'Player', fov: 60, dist: 9, height: 3.4 },
-        entities: E
-      }
-    }
   }
 }
 
 /* ------------------------------------------------------------------ */
-/* Prompt -> template matching (keyword scorer)                       */
+/* Public entry points                                                */
 /* ------------------------------------------------------------------ */
 
-export function matchTemplate(prompt: string): string {
-  const p = prompt.toLowerCase()
-  const scores: Record<string, number> = {
-    flappy: (p.match(/flappy|bird|flap|pipe/g) || []).length * 3,
-    breakout: (p.match(/breakout|brick|paddle|pong|arkanoid/g) || []).length * 3,
-    runner: (p.match(/runner|endless|dino|run\b|scroll/g) || []).length * 3,
-    shooter: (p.match(/shoot|space|invader|galaga|bullet|ship|asteroid|enemy wave/g) || []).length * 2,
-    explorer3d: (p.match(/3d|fps|first[- ]?person|third[- ]?person|walk|explore|gem|cube|sphere|camera/g) || []).length * 2,
-    platformer: (p.match(/platform|mario|jump|side[- ]?scroll|coin|flag/g) || []).length * 2
-  }
-  let best = 'platformer'
-  let bestScore = -1
-  for (const [k, v] of Object.entries(scores)) {
-    if (v > bestScore) { bestScore = v; best = k }
-  }
-  if (bestScore <= 0) return /\b3d\b|fps/.test(p) ? 'explorer3d' : 'platformer'
-  return best
+export interface GenInfo { genre: Genre; theme: ThemeKey; themeLabel: string; difficulty: number; doubleJump: boolean; movingPlatforms: boolean }
+
+export function generateOffline(prompt: string, seed = Math.floor(Math.random() * 1e9)): { spec: SceneSpec; info: GenInfo } {
+  const intent = parseIntent(prompt || '', seed)
+  const spec = synthesize(intent, seed)
+  return { spec, info: { genre: intent.genre, theme: intent.theme, themeLabel: THEMES[intent.theme].label, difficulty: intent.difficulty, doubleJump: intent.doubleJump, movingPlatforms: intent.movingPlatforms } }
 }
 
-export function generateOffline(prompt: string, seed = Math.floor(Math.random() * 1e9)): { spec: SceneSpec; template: string } {
-  const key = prompt.trim() ? matchTemplate(prompt) : 'platformer'
-  const t = TEMPLATES[key] || TEMPLATES.platformer
-  return { spec: t.build(seed), template: key }
+export function blank2D(): SceneSpec {
+  return {
+    name: 'Untitled 2D', mode: '2d', useGradient: true,
+    bgTop: '#101a3a', bgBottom: '#3b5f8a', gravity2d: 1700,
+    camera2d: { zoom: 1, follow: 'Player' },
+    entities: [
+      groundSeg(0, 1200, THEMES.classic, 42),
+      {
+        name: 'Player', tags: ['player'], pos: [0, 60, 4],
+        comps: [
+          { type: 'sprite2d', sprite: 'player', w: 36, h: 46, seed: 7, color: '#ef476f', screen: false },
+          { type: 'body2d', gravityScale: 1, w: 30, h: 44 },
+          { type: 'script', code: `// Player controller (2D platformer)
+var SP = 240
+if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) self.vel.x = -SP
+else if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.vel.x = SP
+else self.vel.x = 0
+if ((engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")) && self.onGround) {
+  self.vel.y = 660
+  self.burst(8)
+}
+if (self.pos.y < -260) engine.gameOver("You fell!")` }
+        ]
+      },
+      hudText('Score', 'Score: 0'),
+      hint2D('A/D move · Space jump · Select an entity and add Scripts in the Inspector')
+    ]
+  }
+}
+
+export function blank3D(): SceneSpec {
+  return {
+    name: 'Untitled 3D', mode: '3d', useGradient: true,
+    bgTop: '#0b1026', bgBottom: '#1b2b4a', gravity3d: 24,
+    camera3d: { mode: 'third', follow: 'Player', fov: 60, dist: 9, height: 3.4 },
+    entities: [
+      { name: 'Sunlight', pos: [18, 30, 12], comps: [{ type: 'light3d', kind: 'sun', color: '#ffffff', intensity: 1.35, distance: 0 }] },
+      { name: 'Skylight', comps: [{ type: 'light3d', kind: 'hemisphere', color: '#bfd4ff', intensity: 0.65, distance: 0 }] },
+      { name: 'Ground', pos: [0, 0, 0], comps: [{ type: 'mesh3d', geo: 'plane', color: '#334155', texture: 'none', wire: false }] },
+      playerEntity3D(0, 1.1, '#f97316'),
+      hudText('Score', 'Score: 0'),
+      hint2D('WASD move · Space jump')
+    ]
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -798,7 +972,7 @@ export function localAssistant(
   if ((m = t.match(/add (\d+) (enemy|enemies|monster|monsters)/))) {
     const n = Math.min(30, parseInt(m[1]))
     if (mode === '2d') {
-      for (let i = 0; i < n; i++) addSpec(enemyPatrol(-250 + Math.random() * 500, 30, Math.floor(Math.random() * 9999)))
+      for (let i = 0; i < n; i++) addSpec(enemyPatrol(-250 + Math.random() * 500, 30, 55, Math.floor(Math.random() * 9999)))
     } else {
       for (let i = 0; i < n; i++) {
         addSpec({
@@ -823,7 +997,7 @@ export function localAssistant(
           addSpec(cloud(Math.round(-300 + Math.random() * 700), Math.round(120 + Math.random() * 160), Math.floor(Math.random() * 9999)))
         } else {
           const w = 100 + Math.floor(Math.random() * 140)
-          addSpec(platform(Math.round(-300 + Math.random() * 700), Math.round(50 + Math.random() * 120), w, PALETTE[Math.floor(Math.random() * PALETTE.length)], Math.floor(Math.random() * 9999)))
+          addSpec(platform(Math.round(-300 + Math.random() * 700), Math.round(50 + Math.random() * 120), w, '#8b5cf6', Math.floor(Math.random() * 9999)))
         }
       } else {
         if (kind === 'tree') {
@@ -847,11 +1021,12 @@ export function localAssistant(
       scene.meta.bgBottom = hex
       scene.meta.useGradient = false
       refresh()
-      return { reply: `Background set to ${m[2]} (${hex}).`, changed: true }
+      return { reply: `Background is now ${m[2]}.`, changed: true }
     }
+    return { reply: `I don't know the color "${m[2]}". Try: red, blue, green, yellow, purple, pink, orange, cyan, white, black, gray, gold, teal, lime`, changed: false }
   }
 
-  if ((m = t.match(/make (?:the )?(?:entity )?["']?([\w ]+)["']? (?:color )?(\w+)/)) && COLORS[m[2]] && !/background|bg|sky/.test(t)) {
+  if ((m = t.match(/make (?:the )?(.+?) (red|blue|green|yellow|purple|pink|orange|cyan|white|black|gray|grey|gold|teal|lime|violet|sky)\b/)) && !/background|bg|sky/.test(t)) {
     const name = m[1].trim()
     const e = scene.byName(name) || scene.byName(name.replace(/\b\w/g, c => c.toUpperCase()))
     if (e) {
@@ -863,10 +1038,10 @@ export function localAssistant(
       refresh()
       return { reply: `"${e.name}" is now ${m[2]}.`, changed: true }
     }
-    return { reply: `No entity named "${name}" found. Try: add 5 coins`, changed: false }
+    return { reply: `No entity named "${name}". Try: add 5 coins`, changed: false }
   }
 
-  if ((m = t.match(/gravity (?:to |as )?(\d+)/))) {
+  if ((m = t.match(/gravity (?:to )?(\d+)/))) {
     const n = parseInt(m[1])
     if (mode === '2d') scene.meta.gravity2d = n
     else scene.meta.gravity3d = Math.max(1, Math.min(60, n))
@@ -893,6 +1068,13 @@ export function localAssistant(
     return { reply: `Cleared ${what}.`, changed: true }
   }
 
+  if (/^(hi|hello|hey|help|ki korte paro|kibhabe|how)/.test(t)) {
+    return {
+      reply: 'Ami NovaAI — tomar offline game assistant! Commands:\n\n  • add 10 coins / gems · add 3 enemies\n  • add 5 platforms / crates / trees\n  • make background red · make Player green\n  • gravity 800 · zoom 1.5\n  • clear coins / enemies / all\n\nAI Builder tab e prompt likhe full game generate koro — LLM key thakle (AI Settings) aro shoktishali!',
+      changed: false
+    }
+  }
+
   return {
     reply: [
       'I am NovaAI (offline mode — connect an LLM in AI Settings for full power). Commands I understand:',
@@ -901,9 +1083,9 @@ export function localAssistant(
       '  • add 5 platforms / crates / trees',
       '  • make background red · make Player green',
       '  • gravity 800 · zoom 1.5',
-      '  • clear coins / clear enemies / clear all',
+      '  • clear coins / enemies / all',
       '',
-      'Tip: use the AI Builder tab (⌁) to generate a full game from a description!'
+      'Tip: use the AI Builder tab (⌁) to synthesize a full game from a prompt!'
     ].join('\n'),
     changed: false
   }

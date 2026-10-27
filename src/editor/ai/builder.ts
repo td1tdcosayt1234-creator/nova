@@ -3,7 +3,7 @@
 import type { SceneSpec } from '../../engine/spec'
 import { validateSpec } from '../../engine/spec'
 import { chatComplete, aiConfigured, type AISettings } from './providers'
-import { generateOffline, localAssistant, type AssistantAction } from './localgen'
+import { generateOffline, localAssistant, type AssistantAction, type GenInfo } from './localgen'
 
 /* ---------- Builder: prompt -> SceneSpec ---------- */
 
@@ -109,7 +109,7 @@ export type ChatMsg = { role: 'user' | 'assistant'; content: string }
 export interface BuilderResult {
   spec: SceneSpec
   source: 'llm' | 'offline'
-  template?: string
+  info?: GenInfo
   notice?: string
 }
 
@@ -127,7 +127,7 @@ export async function buildGame(
       return {
         spec: off.spec,
         source: 'offline',
-        template: off.template,
+        info: off.info,
         notice: `LLM failed (${String(err).slice(0, 160)}) — used built-in NovaAI offline generator instead.`
       }
     }
@@ -136,7 +136,7 @@ export async function buildGame(
   return {
     spec: off.spec,
     source: 'offline',
-    template: off.template,
+    info: off.info,
     notice: aiConfigured(settings) ? undefined : 'No AI key configured — used built-in NovaAI offline generator (AI Settings se key add koro for full power).'
   }
 }

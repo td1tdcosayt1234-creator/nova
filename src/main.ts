@@ -8,7 +8,7 @@ import { ScriptHost, type EngineAPI } from './engine/script'
 import { stepPhysics2D } from './engine/physics2d'
 import { stepPhysics3D } from './engine/physics3d'
 import { applySceneSpec, specToEntity, type SceneSpec, type EntitySpec } from './engine/spec'
-import { TEMPLATES, generateOffline } from './editor/ai/localgen'
+import { blank2D, blank3D } from './editor/ai/localgen'
 import { buildGame, aiAssistant, localAssistant, loadAISettings, aiConfigured, normalizeSettings, type ChatMsg } from './editor/ai/builder'
 import { buildUI, menubarButton, modal, openSettingsModal, openDocsModal, showWelcome, activateTab, type MenuItem, type UIRefs } from './editor/ui'
 import { initHierarchy, renderHierarchy } from './editor/hierarchy'
@@ -446,12 +446,12 @@ function newProject() {
   row.style.gap = '10px'
   const b2 = document.createElement('button')
   b2.className = 'btn primary'; b2.style.flex = '1'
-  b2.textContent = '⬜ Empty 2D'
-  b2.addEventListener('click', () => { loadSpec(TEMPLATES.empty2d.build(Math.floor(Math.random() * 99999)), 'Empty 2D'); document.querySelectorAll('.modal-back').forEach(m => m.remove()) })
+  b2.textContent = '⬜ Blank 2D'
+  b2.addEventListener('click', () => { loadSpec(blank2D(), 'Untitled 2D'); document.querySelectorAll('.modal-back').forEach(m => m.remove()) })
   const b3 = document.createElement('button')
   b3.className = 'btn primary'; b3.style.flex = '1'
-  b3.textContent = '🔲 Empty 3D'
-  b3.addEventListener('click', () => { loadSpec(TEMPLATES.empty3d.build(0), 'Empty 3D'); document.querySelectorAll('.modal-back').forEach(m => m.remove()) })
+  b3.textContent = '🔲 Blank 3D'
+  b3.addEventListener('click', () => { loadSpec(blank3D(), 'Untitled 3D'); document.querySelectorAll('.modal-back').forEach(m => m.remove()) })
   row.append(b2, b3)
   body.appendChild(row)
 }
@@ -461,10 +461,7 @@ function newProject() {
 menubarButton(ui.topbar, 'File', [
   { label: '🆕 New Scene', hint: '', action: newProject },
   { label: '📂 Open Project', action: openProject },
-  { label: '💾 Save Project', hint: 'Ctrl+S', action: saveProject },
-  { sep: true },
-  { label: '🏆 Examples: Platformer', action: () => loadSpec(TEMPLATES.platformer.build(Math.floor(Math.random() * 99999)), 'Platformer') },
-  { label: '🏆 Examples: 3D Explorer', action: () => loadSpec(TEMPLATES.explorer3d.build(Math.floor(Math.random() * 99999)), '3D Explorer') }
+  { label: '💾 Save Project', hint: 'Ctrl+S', action: saveProject }
 ])
 
 menubarButton(ui.topbar, 'AI', [
@@ -503,13 +500,26 @@ window.addEventListener('keydown', ev => {
 
 /* ---------- AI Builder wiring ---------- */
 
-for (const [key, t] of Object.entries(TEMPLATES)) {
+/* Prompt idea chips — prompt fill kore generate trigger kore (no canned templates) */
+
+const IDEA_CHIPS: Array<{ icon: string; label: string; prompt: string }> = [
+  { icon: '🏃', label: 'Platformer', prompt: 'ekta fun platformer banao — coins, enemies, moving platforms' },
+  { icon: '🚀', label: 'Space Shooter', prompt: 'space shooter — alien waves attack korche, easy difficulty' },
+  { icon: '🐦', label: 'Flappy', prompt: 'flappy bird game — pipes er majh diye ure jao' },
+  { icon: '🧱', label: 'Breakout', prompt: 'breakout game — onek brick row smash koro' },
+  { icon: '🦖', label: 'Runner', prompt: 'endless runner — hazard jump kore dodge koro' },
+  { icon: '💎', label: '3D Explorer', prompt: '3d jungle world e explore kore 10 gems collect korbo' },
+  { icon: '🌙', label: 'Neon Night', prompt: 'neon city runner, hard difficulty, night theme, 12 coins' },
+  { icon: '🎲', label: 'Surprise Me', prompt: '' }
+]
+
+for (const idea of IDEA_CHIPS) {
   const chip = document.createElement('button')
   chip.className = 'chip'
-  chip.textContent = `${t.icon} ${t.label}`
+  chip.textContent = `${idea.icon} ${idea.label}`
   chip.addEventListener('click', () => {
-    loadSpec(t.build(Math.floor(Math.random() * 1e9)), t.label)
-    appendBuildLog(`⚡ Instant template: ${t.label} (${t.mode.toUpperCase()})`, 'hi')
+    ui.builder.prompt.value = idea.prompt
+    ui.builder.gen.click()
   })
   ui.builder.chips.appendChild(chip)
 }
@@ -536,11 +546,11 @@ ui.builder.gen.addEventListener('click', async () => {
   try {
     const settings = loadAISettings()
     const res = await buildGame(settings, prompt)
-    loadSpec(res.spec, res.source === 'llm' ? 'AI generated' : `NovaAI offline (${res.template})`)
+    loadSpec(res.spec, res.source === 'llm' ? 'AI generated' : res.info ? `NovaAI offline (${res.info.genre} · ${res.info.themeLabel})` : 'NovaAI offline')
     if (res.source === 'llm') {
       appendBuildLog(`✔ LLM generated a complete game — ${res.spec.entities?.length || 0} entities`, 'ok')
-    } else {
-      appendBuildLog(`✔ Built-in NovaAI generated "${res.template}" template`, 'ok')
+    } else if (res.info) {
+      appendBuildLog(`✔ NovaAI synthesized "${res.spec.name}" — genre: ${res.info.genre} · theme: ${res.info.themeLabel} · difficulty: ${res.info.difficulty}/10${res.info.doubleJump ? ' · double-jump' : ''}${res.info.movingPlatforms ? ' · moving platforms' : ''}`, 'ok')
     }
     if (res.notice) appendBuildLog('ℹ ' + res.notice, 'err')
     appendBuildLog('▶ Chapo Play button to play!', 'hi')
@@ -716,8 +726,7 @@ const savedScene = saved ? (() => { try { return deserializeScene(saved) } catch
 if (savedScene) {
   loadScene(savedScene, 'autosave')
 } else {
-  const off = generateOffline('', Math.floor(Math.random() * 1e9))
-  loadSpec(off.spec, 'Nova Platformer')
+  loadSpec(blank2D(), 'Untitled 2D')
 }
 
 statusAI()
@@ -736,8 +745,10 @@ showWelcome(!!savedScene, key => {
   } else if (key === 'continue' && savedScene) {
     // already loaded
     editor.log('info', 'Continued from autosave')
-  } else if (TEMPLATES[key]) {
-    loadSpec(TEMPLATES[key].build(Math.floor(Math.random() * 1e9)), TEMPLATES[key].label)
+  } else if (key === 'blank2d') {
+    loadSpec(blank2D(), 'Untitled 2D')
+  } else if (key === 'blank3d') {
+    loadSpec(blank3D(), 'Untitled 3D')
   }
 })
 
