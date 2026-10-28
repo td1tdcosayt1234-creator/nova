@@ -2,7 +2,7 @@
   "name": "nova-engine",
   "productName": "Nova Engine",
   "version": "0.1.0",
-  "description": "Nova Engine - AI-first 2D & 3D game engine with a full visual editor",
+  "description": "Nova Engine - AI-first 2D & 3D game engine with real physics (Planck.js/Box2D 2D + Rapier 3D), a full visual editor and LLM-powered generation",
   "main": "electron/main.js",
   "license": "MIT",
   "scripts": {
@@ -11,6 +11,8 @@
     "start": "node build.mjs && electron ."
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "planck": "^1.4.2",
     "three": "^0.170.0"
   },
   "devDependencies": {

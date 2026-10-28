@@ -123,7 +123,7 @@ export function buildUI(app: HTMLElement): UIRefs {
   const builder = el('div', 'builder', tabBodies.builder)
   const chips = el('div', 'chips', builder)
   const prompt = el('textarea', '', builder) as HTMLTextAreaElement
-  prompt.placeholder = 'Describe your game... e.g. "ekta space shooter jekhane ami alien der shoot kori, score barbe, 3 life thakbe"\n\n(Empty = random platformer. LLM key thakle full AI generation hobe, na thakle built-in NovaAI offline generator.)'
+  prompt.placeholder = 'Describe your game... e.g. "ekta space shooter jekhane ami alien der shoot kori, score barbe, 3 life thakbe"\n\n(Generation runs on your connected LLM — add a key in AI Settings. No key? Ekhono 2D/3D blank scenes + offline editing commands cholbe.)'
   const brow = el('div', 'row', builder)
   const gen = el('button', 'btn primary', brow) as HTMLButtonElement
   gen.textContent = '✨ Generate Game'
@@ -258,7 +258,7 @@ export function closeAllModals() {
 
 export function openSettingsModal(onChanged: () => void) {
   const info = PROVIDER_INFO
-  const { body, close } = modal('⚙️ AI Settings', 'NovaAI offline generator sarai jekono LLM provider connect koro — builder ar assistant full power paye jabe.')
+  const { body, close } = modal('⚙️ AI Settings', 'Jekono LLM provider connect koro — builder ar assistant full power paye jabe.')
   const s = loadAISettings()
 
   const mkRow = (label: string) => {
@@ -379,9 +379,9 @@ self.onCollide(function (other) {
   }
 })</pre>
     <h4>Physics</h4>
-    <p>2D: AABB, y-up. Movers vs statics resolve hoy; landing hole <code>self.onGround = true</code>. Jump: <code>self.vel.y = 620</code>. Sensor bodies shudhu event dey, push kore na. 3D: ground plane y=0 always solid; sphere approx collisions.</p>
+    <p>2D: <b>Planck.js (Box2D)</b> — real rigid bodies, rotation (keepUpright diye lock koro), friction, bounce, dynamic–dynamic collisions, sensors. Landing hole <code>self.onGround = true</code>. Jump: <code>self.vel.y = 620</code>. 3D: <b>Rapier (Rust/WASM)</b> — box/sphere/capsule colliders mesh theke, contact events, CCD. Ground plane = real static collider.</p>
     <h4>AI Builder</h4>
-    <p>Prompt likhe Generate chapo. LLM configured thakle full AI generation hoy, na thakle built-in <b>NovaAI offline</b> procedural generator chole — prompt theke intent (genre · theme · difficulty · counts) parse kore seed-varied notun game synthesize kore. Kono canned template nei — same prompt-o protibar alada game banay. IDEA chips gulo prompt idea fill kore generate trigger kore.</p>
+    <p>Prompt likhe Generate chapo — apnar connected LLM (AI Settings) diye full game generate hoy. Canned offline synth ar nei; without key offline assistant commands diye real scene edit (add coins, clear, colors...) cholbe. IDEA chips gulo prompt idea fill kore generate trigger kore.</p>
     <h4>Shortcuts</h4>
     <p><code>Del</code> delete entity · <code>Ctrl+D</code> duplicate · <code>Ctrl+S</code> save · RMB drag = orbit/pan · Wheel = zoom</p>
   </div>`
@@ -399,7 +399,7 @@ export function showWelcome(hasAutosave: boolean, onPick: (key: string) => void)
   const badgeRow = el('div', '', w)
   badgeRow.style.display = 'flex'
   badgeRow.style.gap = '8px'
-  badgeRow.innerHTML = '<span class="badge">AI Builder</span><span class="badge">2D + 3D</span><span class="badge">Visual Editor</span><span class="badge">ECS + Scripts</span>'
+  badgeRow.innerHTML = '<span class="badge">AI Builder</span><span class="badge">Box2D 2D Physics</span><span class="badge">Rapier 3D Physics</span><span class="badge">Visual Editor</span><span class="badge">ECS + Scripts</span>'
 
   const cards = el('div', '', w)
   cards.style.display = 'flex'

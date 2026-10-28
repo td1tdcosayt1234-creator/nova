@@ -5,10 +5,10 @@ import { Renderer2D, type Cam2D } from './engine/renderer2d'
 import { Renderer3D } from './engine/renderer3d'
 import { Input } from './engine/input'
 import { ScriptHost, type EngineAPI } from './engine/script'
-import { stepPhysics2D } from './engine/physics2d'
-import { stepPhysics3D } from './engine/physics3d'
+import { Physics2D } from './engine/physics2d'
+import { Physics3D, rapierReady } from './engine/physics3d'
 import { applySceneSpec, specToEntity, type SceneSpec, type EntitySpec } from './engine/spec'
-import { blank2D, blank3D } from './editor/ai/localgen'
+import { blank2D, blank3D } from './editor/blank'
 import { buildGame, aiAssistant, localAssistant, loadAISettings, aiConfigured, normalizeSettings, type ChatMsg } from './editor/ai/builder'
 import { buildUI, menubarButton, modal, openSettingsModal, openDocsModal, showWelcome, activateTab, type MenuItem, type UIRefs } from './editor/ui'
 import { initHierarchy, renderHierarchy } from './editor/hierarchy'
@@ -56,6 +56,10 @@ let engineAPI: EngineAPI | null = null
 let snapshot = ''
 let chatHistory: ChatMsg[] = []
 
+/* real physics worlds — built on Play, torn down on Stop */
+let phys2: Physics2D | null = null
+let phys3: Physics3D | null = null
+
 /* ---------- engine API (script runtime) ---------- */
 
 function makeEngineAPI(): EngineAPI {
@@ -80,6 +84,8 @@ function makeEngineAPI(): EngineAPI {
     findAll: (tag: string) => ed.scene.byTag(tag).map(e => ed.host.api(e, api)),
     spawn: (spec: any) => {
       const e = addSpecEntity(ed.scene, spec)
+      if (ed.scene.meta.mode === '3d') phys3?.add(e)
+      else phys2?.add(e)
       return ed.host.api(e, api)
     },
     destroy: (target: any) => {
@@ -135,7 +141,7 @@ cons = initConsole(editor, ui.console.logEl, ui.console.clear)
 
 /* ---------- play / pause / stop ---------- */
 
-function startPlay() {
+async function startPlay() {
   if (editor.playing) return
   snapshot = serializeScene(editor.scene)
   editor.playing = true
@@ -154,7 +160,16 @@ function startPlay() {
   } else {
     editor.playCam = { yaw: 0, pitch: -0.12 }
   }
-  editor.log('ok', `▶ Playing "${m.name}" — good luck!`)
+  // real physics worlds (3D needs the Rapier WASM module)
+  await rapierReady
+  if (!editor.playing) return   // user pressed Stop while waiting
+  const sink = (a: Entity, b: Entity) => {
+    editor.host.dispatchCollide(a.id, b, engineAPI!)
+    editor.host.dispatchCollide(b.id, a, engineAPI!)
+  }
+  if (m.mode === '3d') phys3 = new Physics3D(editor.scene, sink)
+  else phys2 = new Physics2D(editor.scene, sink)
+  editor.log('ok', `▶ Playing "${m.name}" — ${m.mode === '3d' ? 'Rapier' : 'Planck (Box2D)'} physics online!`)
   updatePlayUI()
 }
 
@@ -165,6 +180,8 @@ function stopPlay() {
   editor.ended = false
   editor.input.setEnabled(false)
   editor.host.reset()
+  if (phys2) { phys2.dispose(); phys2 = null }
+  if (phys3) { phys3.dispose(); phys3 = null }
   try {
     editor.scene = deserializeScene(snapshot)
   } catch (err) {
@@ -280,18 +297,16 @@ function frame(now: number) {
       editor.host.run(e, engineAPI)
     }
 
-    // physics
-    const sink = (a: Entity, b: Entity) => {
-      editor.host.dispatchCollide(a.id, b, engineAPI!)
-      editor.host.dispatchCollide(b.id, a, engineAPI!)
-    }
-    if (mode3d) stepPhysics3D(editor.scene, dt, sink)
-    else stepPhysics2D(editor.scene, dt, sink)
+    // physics (real worlds: Planck/Box2D for 2D, Rapier for 3D)
+    if (mode3d) { if (phys3) phys3.step(dt) }
+    else if (phys2) phys2.step(dt)
 
     // purge destroyed
     const dead = editor.scene.entities.filter(e => (e as any).__dead)
     for (const e of dead) {
       editor.host.drop(e.id)
+      phys2?.remove(e.id)
+      phys3?.remove(e.id)
       editor.scene.remove(e.id)
     }
 
@@ -476,13 +491,12 @@ menubarButton(ui.topbar, 'Help', [
   { label: '📘 Scripting & AI Guide', action: openDocsModal },
   { label: 'ℹ️ About Nova', action: () => {
     const { body } = modal('Nova Engine', 'AI-first 2D & 3D game engine')
-    body.innerHTML = `<div class="doc"><p>Nova Engine v0.1 — ekta AI-first game engine:</p>
-    <p>• <b>AI Builder</b> — prompt theke full game generate<br>
-    • <b>2D</b> — Canvas2D renderer, AABB physics, pixel-art AI<br>
-    • <b>3D</b> — WebGL (three.js) renderer, lights/shadows, 3D physics<br>
+    body.innerHTML = `<div class="doc"><p>Nova Engine v0.2 — ekta AI-first game engine, ekhon real physics shoho:</p>
+    <p>• <b>AI Builder</b> — prompt theke LLM diye full game generate<br>
+    <b>2D</b> — Canvas2D renderer + <b>Planck.js (Box2D) physics</b>: rigid bodies, rotation, friction, bounce, sensors<br>
+    • <b>3D</b> — WebGL (three.js) renderer + <b>Rapier (Rust/WASM) physics</b>: box/sphere/capsule colliders, contact events<br>
     • <b>Editor</b> — hierarchy, inspector, play mode, console<br>
-    • <b>Scripting</b> — JS scripts per entity, hot reload<br>
-    • <b>NovaAI offline</b> — key chhara-o AI generation kaj kore</p></div>`
+    • <b>Scripting</b> — JS scripts per entity, hot reload</p></div>`
   } }
 ])
 
@@ -546,13 +560,8 @@ ui.builder.gen.addEventListener('click', async () => {
   try {
     const settings = loadAISettings()
     const res = await buildGame(settings, prompt)
-    loadSpec(res.spec, res.source === 'llm' ? 'AI generated' : res.info ? `NovaAI offline (${res.info.genre} · ${res.info.themeLabel})` : 'NovaAI offline')
-    if (res.source === 'llm') {
-      appendBuildLog(`✔ LLM generated a complete game — ${res.spec.entities?.length || 0} entities`, 'ok')
-    } else if (res.info) {
-      appendBuildLog(`✔ NovaAI synthesized "${res.spec.name}" — genre: ${res.info.genre} · theme: ${res.info.themeLabel} · difficulty: ${res.info.difficulty}/10${res.info.doubleJump ? ' · double-jump' : ''}${res.info.movingPlatforms ? ' · moving platforms' : ''}`, 'ok')
-    }
-    if (res.notice) appendBuildLog('ℹ ' + res.notice, 'err')
+    loadSpec(res.spec, 'AI generated')
+    appendBuildLog(`✔ LLM generated a complete game — ${res.spec.entities?.length || 0} entities`, 'ok')
     appendBuildLog('▶ Chapo Play button to play!', 'hi')
   } catch (err) {
     appendBuildLog('✖ ' + String(err), 'err')
@@ -758,6 +767,6 @@ function statusAI() {
     const n = normalizeSettings(s)
     ui.status.ai.textContent = `🤖 AI: ${n.provider}/${n.model}`
   } else {
-    ui.status.ai.textContent = '🤖 AI: offline NovaAI (key add korle aro shoktishali — AI menu → Settings)'
+    ui.status.ai.textContent = '🤖 AI: not connected (AI menu → Settings e key add korun)'
   }
 }

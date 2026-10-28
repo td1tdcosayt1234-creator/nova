@@ -69,7 +69,7 @@ export const COMP_DEFS: Record<string, CompDef> = {
   body2d: {
     label: 'Physics 2D',
     icon: '🧱',
-    defaults: () => ({ type: 'body2d', vx: 0, vy: 0, gravityScale: 1, isStatic: false, sensor: false, bounce: 0, w: 60, h: 60, onGround: false }),
+    defaults: () => ({ type: 'body2d', vx: 0, vy: 0, gravityScale: 1, isStatic: false, sensor: false, bounce: 0, friction: 0.35, keepUpright: true, w: 60, h: 60, onGround: false }),
     fields: [
       { key: 'vx', label: 'Velocity X', type: 'number', step: 10 },
       { key: 'vy', label: 'Velocity Y', type: 'number', step: 10 },
@@ -77,6 +77,8 @@ export const COMP_DEFS: Record<string, CompDef> = {
       { key: 'isStatic', label: 'Static', type: 'check' },
       { key: 'sensor', label: 'Trigger Only', type: 'check' },
       { key: 'bounce', label: 'Bounce', type: 'number', step: 0.1 },
+      { key: 'friction', label: 'Friction', type: 'number', step: 0.05 },
+      { key: 'keepUpright', label: 'Keep Upright', type: 'check' },
       { key: 'w', label: 'Collider W', type: 'number', step: 1 },
       { key: 'h', label: 'Collider H', type: 'number', step: 1 }
     ]
@@ -95,7 +97,7 @@ export const COMP_DEFS: Record<string, CompDef> = {
   rigid3d: {
     label: 'Physics 3D',
     icon: '🪐',
-    defaults: () => ({ type: 'rigid3d', vx: 0, vy: 0, vz: 0, isStatic: false, sensor: false, bounce: 0, gravityScale: 1, radius: 0, onGround: false }),
+    defaults: () => ({ type: 'rigid3d', vx: 0, vy: 0, vz: 0, isStatic: false, sensor: false, bounce: 0, friction: 0.6, lockRot: false, gravityScale: 1, radius: 0, onGround: false }),
     fields: [
       { key: 'vx', label: 'Velocity X', type: 'number', step: 1 },
       { key: 'vy', label: 'Velocity Y', type: 'number', step: 1 },
@@ -103,6 +105,8 @@ export const COMP_DEFS: Record<string, CompDef> = {
       { key: 'isStatic', label: 'Static', type: 'check' },
       { key: 'sensor', label: 'Trigger Only', type: 'check' },
       { key: 'bounce', label: 'Bounce', type: 'number', step: 0.1 },
+      { key: 'friction', label: 'Friction', type: 'number', step: 0.05 },
+      { key: 'lockRot', label: 'Lock Rotation', type: 'check' },
       { key: 'gravityScale', label: 'Gravity ×', type: 'number', step: 0.1 },
       { key: 'radius', label: 'Radius', type: 'number', step: 0.1 }
     ]
