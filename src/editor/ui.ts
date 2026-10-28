@@ -6,6 +6,9 @@ export interface MenuItem { label?: string; hint?: string; sep?: boolean; action
 
 export interface UIRefs {
   topbar: HTMLElement
+  homeBtn: HTMLButtonElement
+  saveBtn: HTMLButtonElement
+  titleEl: HTMLElement
   vpWrap: HTMLElement
   vp2d: HTMLCanvasElement
   vp3d: HTMLElement
@@ -20,7 +23,7 @@ export interface UIRefs {
   builder: { prompt: HTMLTextAreaElement; gen: HTMLButtonElement; blog: HTMLElement; chips: HTMLElement }
   assistant: { logEl: HTMLElement; input: HTMLInputElement; send: HTMLButtonElement }
   console: { logEl: HTMLElement; clear: HTMLButtonElement }
-  status: { state: HTMLElement; fps: HTMLElement; count: HTMLElement; ai: HTMLElement; sel: HTMLElement }
+  status: { state: HTMLElement; fps: HTMLElement; count: HTMLElement; ai: HTMLElement; sel: HTMLElement; saved: HTMLElement }
   playBtn: HTMLButtonElement
   pauseBtn: HTMLButtonElement
   stopBtn: HTMLButtonElement
@@ -42,12 +45,22 @@ export function buildUI(app: HTMLElement): UIRefs {
   const topbar = el('div', 'topbar', app)
   const logo = el('div', 'logo', topbar)
   logo.innerHTML = 'NOVA <small>ENGINE</small>'
+  const homeBtn = el('button', 'tbtn', topbar) as HTMLButtonElement
+  homeBtn.textContent = '🏠 Home'
+  homeBtn.title = 'Back to Home (project list)'
+
+  const titleEl = el('div', 'project-title', topbar)
+  titleEl.textContent = '—'
 
   const menuHost = el('div', '', topbar)
   menuHost.style.display = 'flex'
   menuHost.style.gap = '2px'
 
   el('div', 'spacer', topbar)
+
+  const saveBtn = el('button', 'tbtn save', topbar) as HTMLButtonElement
+  saveBtn.textContent = '💾 Save'
+  saveBtn.title = 'Save project to disk / project library (Ctrl+S)'
 
   const playgroup = el('div', 'playgroup', topbar)
   const playBtn = el('button', 'pbtn play', playgroup) as HTMLButtonElement
@@ -161,19 +174,20 @@ export function buildUI(app: HTMLElement): UIRefs {
   const stCount = el('span', '', statusbar); stCount.textContent = '0 entities'
   const stSel = el('span', '', statusbar); stSel.textContent = '—'
   el('div', 'spacer', statusbar)
+  const stSaved = el('span', '', statusbar)
   const stAi = el('span', '', statusbar)
 
   activateTab('builder')
 
   return {
-    topbar, vpWrap, vp2d, vp3d, hintEl,
+    topbar, homeBtn, saveBtn, titleEl, vpWrap, vp2d, vp3d, hintEl,
     hierarchyList, hierarchyAdd, assetGrid, assetShuffle,
     inspector,
     tabBtns, tabBodies,
     builder: { prompt, gen, blog, chips },
     assistant: { logEl: chatlog, input: ainput, send: asend },
     console: { logEl: conslog, clear: cclear },
-    status: { state: stState, fps: stFps, count: stCount, ai: stAi, sel: stSel },
+    status: { state: stState, fps: stFps, count: stCount, ai: stAi, sel: stSel, saved: stSaved },
     playBtn, pauseBtn, stopBtn, seg2d, seg3d
   }
 }
@@ -387,38 +401,207 @@ self.onCollide(function (other) {
   </div>`
 }
 
-/* ---------- Welcome overlay ---------- */
+/* ---------- Shortcuts modal ---------- */
 
-export function showWelcome(hasAutosave: boolean, onPick: (key: string) => void) {
-  const w = el('div', 'welcome', document.body)
+export function openShortcutsModal() {
+  const { body } = modal('⌨ Keyboard Shortcuts')
+  body.innerHTML = `
+  <div class="doc">
+    <h4>Editor</h4>
+    <p><code>Del</code> delete entity · <code>Ctrl+D</code> duplicate · <code>Ctrl+S</code> save project<br>
+    <code>F</code> focus selected entity (camera center) · <code>G</code> toggle grid · <code>Esc</code> deselect</p>
+    <h4>Viewport</h4>
+    <p>2D: RMB drag = pan · Wheel = zoom · LMB click = select · LMB drag = move<br>
+    3D: RMB drag = orbit · Wheel = zoom · LMB click = select · LMB drag = move XZ</p>
+    <h4>Play mode</h4>
+    <p><code>WASD</code>/<code>Arrows</code> move · <code>Space</code> jump · <code>Mouse</code> camera look (3D first/third) · <code>Esc</code> = <b>Stop</b> back to editor</p>
+  </div>`
+}
 
-  const logo = el('div', 'wlogo', w)
-  logo.textContent = 'NOVA'
-  const sub = el('div', 'wsub', w)
-  sub.innerHTML = 'The AI-first 2D &amp; 3D game engine — describe a game, play it instantly.'
-  const badgeRow = el('div', '', w)
-  badgeRow.style.display = 'flex'
-  badgeRow.style.gap = '8px'
-  badgeRow.innerHTML = '<span class="badge">AI Builder</span><span class="badge">Box2D 2D Physics</span><span class="badge">Rapier 3D Physics</span><span class="badge">Visual Editor</span><span class="badge">ECS + Scripts</span>'
+/* ---------- AI Agents / Bridge modal ---------- */
 
-  const cards = el('div', '', w)
-  cards.style.display = 'flex'
-  cards.style.gap = '12px'
-  cards.style.flexWrap = 'wrap'
-  cards.style.justifyContent = 'center'
-  cards.style.maxWidth = '760px'
+const AGENT_TARGETS: Array<{ key: string; label: string; where: string; http?: (mcpUrl: string) => string; stdio?: (proxyPath: string) => string; note: string }> = [
+  {
+    key: 'opencode',
+    label: 'OpenCode',
+    where: 'project root er opencode.json — "mcp" section add koro',
+    http: u => `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "nova-engine": {
+      "type": "remote",
+      "url": "${u}",
+      "enabled": true
+    }
+  }
+}`,
+    note: 'OpenCode chalu korle nova-engine tools autopai — "get scene amake dekho" etc. directly bolte parba.'
+  },
+  {
+    key: 'kiro',
+    label: 'Kiro',
+    where: '<workspace>/.kiro/settings/mcp.json banao (kothao na hoile file e auto suggestion dey)',
+    http: u => `{
+  "mcpServers": {
+    "nova-engine": {
+      "url": "${u}",
+      "disabled": false,
+      "autoApprove": ["get_scene", "list_entities", "read_console", "play_state", "run_scene", "stop_scene", "set_scene"]
+    }
+  }
+}`,
+    note: 'Kiro reload korle Agent panel e mcp__nova-engine__get_scene tools dekhabe.'
+  },
+  {
+    key: 'kilo',
+    label: 'Kilo IDE',
+    where: 'Kilo MCP settings (VSCode settings → MCP Servers → edit config JSON)',
+    http: u => `{
+  "mcpServers": {
+    "nova-engine": {
+      "url": "${u}",
+      "disabled": false
+    }
+  }
+}`,
+    note: 'Streamable HTTP MCP try koro; na challenge hole stdio config use koro (niche Claude Desktop style).'
+  },
+  {
+    key: 'antigravity',
+    label: 'Antigravity',
+    where: 'MCP settings (Agent panel → MCP → Add Server → Streamable HTTP)',
+    http: u => `{
+  "mcpServers": {
+    "nova-engine": {
+      "url": "${u}"
+    }
+  }
+}`,
+    note: 'URL field e http://127.0.0.1:8748/mcp diye save koro — agent puro engine control korte parbe.'
+  },
+  {
+    key: 'cliproxy',
+    label: 'Claude Desktop / Cursor / Kilo (stdio)',
+    where: 'claude_desktop_config.json / Cursor mcp.json (stdio MCP)',
+    stdio: proxy => `{
+  "mcpServers": {
+    "nova-engine": {
+      "command": "node",
+      "args": ["${proxy}"]
+    }
+  }
+}`,
+    note: 'Nova Engine chalu + mcp-server chalu thakte hobe — stdio proxy oitar HTTP Bricdge ke forward kore.'
+  }
+]
 
-  const addCard = (icon: string, title: string, desc: string, key: string) => {
-    const c = el('div', 'wcard', cards)
-    c.innerHTML = `<span class="wi">${icon}</span><span><span class="wt">${title}</span><br><span class="wd">${desc}</span></span>`
-    c.addEventListener('click', () => { w.remove(); onPick(key) })
+export function openAgentsModal() {
+  const { body } = modal('🔗 AI Agents — Connect external AI tools', 'Nova Bridge e ai tools connect koro. Engine khola thakte hobe.')
+  const nova = (window as any).nova
+
+  const status = document.createElement('div')
+  status.className = 'doc'
+  body.appendChild(status)
+
+  let port = 8748
+  const portRow = document.createElement('div')
+  portRow.className = 'formrow'
+  portRow.innerHTML = '<label>Bridge Port</label>'
+  const portIn = document.createElement('input')
+  portIn.style.width = '110px'
+  portRow.appendChild(portIn)
+  const restartBtn = document.createElement('button')
+  restartBtn.className = 'btn small'
+  restartBtn.textContent = '↻ Restart'
+  restartBtn.addEventListener('click', async () => {
+    restartBtn.disabled = true
+    const r = await nova.setBridgePort(Number(portIn.value) || 8748)
+    restartBtn.disabled = false
+    statusLine.textContent = r.ok ? `✅ Bridge restarted on port ${r.port}` : `❌ ${r.error}`
+    refresh()
+  })
+  portRow.appendChild(restartBtn)
+  body.appendChild(portRow)
+
+  const statusLine = document.createElement('div')
+  statusLine.style.cssText = 'font-size:12px;margin:8px 0 4px;color:var(--muted)'
+  body.appendChild(statusLine)
+
+  const mkH4 = (t: string, parent: HTMLElement) => {
+    const h = document.createElement('h4'); h.textContent = t; parent.appendChild(h); return h
+  }
+  mkH4('MCP Setup — kon IDE te kibhabe connect korben', body)
+
+  const selRow = document.createElement('div')
+  selRow.className = 'formrow'
+  selRow.innerHTML = '<label>Target tool</label>'
+  const sel = document.createElement('select')
+  for (const t of AGENT_TARGETS) {
+    const o = document.createElement('option'); o.value = t.key; o.textContent = t.label; sel.appendChild(o)
+  }
+  selRow.appendChild(sel)
+  body.appendChild(selRow)
+
+  const whereEl = document.createElement('div')
+  whereEl.style.cssText = 'font-size:11.5px;color:var(--warn);margin:8px 0 6px'
+  body.appendChild(whereEl)
+
+  const pre = document.createElement('pre')
+  pre.style.whiteSpace = 'pre'
+  body.appendChild(pre)
+
+  const copyBtn = document.createElement('button')
+  copyBtn.className = 'btn small'
+  copyBtn.textContent = '📋 Copy config'
+  copyBtn.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(pre.textContent || '') ; copyBtn.textContent = '✅ Copied' } catch { copyBtn.textContent = '❌ Copy failed' }
+    setTimeout(() => { copyBtn.textContent = '📋 Copy config' }, 1400)
+  })
+  body.appendChild(copyBtn)
+
+  const noteEl = document.createElement('div')
+  noteEl.style.cssText = 'font-size:11.5px;color:var(--muted);margin-top:10px;line-height:1.6'
+  body.appendChild(noteEl)
+
+  mkH4('REST (MCP na thakle curl diye-o chale)', body).style.fontSize = '12.5px'
+  const restPre = document.createElement('pre')
+  restPre.style.whiteSpace = 'pre-wrap'
+  body.appendChild(restPre)
+
+  function renderTarget() {
+    const t = AGENT_TARGETS.find(x => x.key === sel.value)!
+    whereEl.textContent = '📍 ' + t.where
+    if (t.http) pre.textContent = t.http(`http://127.0.0.1:${port}/mcp`)
+    else if (t.stdio) pre.textContent = t.stdio(proxyPath)
+    noteEl.textContent = t.note
+    restPre.textContent =
+      `# engine health / state\ncurl http://127.0.0.1:${port}/health\ncurl http://127.0.0.1:${port}/state\n\n` +
+      `# current scene\ncurl http://127.0.0.1:${port}/scene\n\n` +
+      `# press play / stop\ncurl -X POST http://127.0.0.1:${port}/run\ncurl -X POST http://127.0.0.1:${port}/stop\n\n` +
+      `# replace scene with a Nova SceneSpec\ncurl -X POST http://127.0.0.1:${port}/scene -H "content-type: application/json" -d @myspec.json`
   }
 
-  addCard('🤖', 'AI Builder', 'Describe a game in your own words', 'builder')
-  if (hasAutosave) addCard('💾', 'Continue', 'Load your last autosaved scene', 'continue')
-  addCard('⬜', 'Blank 2D', 'Start from scratch in 2D', 'blank2d')
-  addCard('🔲', 'Blank 3D', 'Blank 3D scene', 'blank3d')
+  let proxyPath = '<nova-install-path>\\electron\\stdio-proxy.js'
+  let mcpUrl = 'http://127.0.0.1:8748/mcp'
 
-  const foot = el('div', 'wfoot', w)
-  foot.textContent = '100% procedural NovaAI — kono canned template nei, prompt theke notun game synthesize hoy'
+  async function refresh() {
+    if (!document.body.contains(body)) { clearInterval(iv); return }
+    if (!nova?.bridgeInfo) {
+      statusLine.textContent = '(Browser mode — Nova Bridge shudhu desktop app e chole)'
+      return
+    }
+    const info = await nova.bridgeInfo()
+    port = info.port || 8748
+    mcpUrl = info.mcpUrl || mcpUrl
+    proxyPath = `${(info.appPath || '').replace(/\\/g, '\\\\')}\\electron\\stdio-proxy.js`
+    portIn.value = String(port)
+    statusLine.textContent = info.running
+      ? `✅ Bridge chalu — MCP: ${mcpUrl} (127.0.0.1 only, local machine)`
+      : '⛔ Bridge off — app restart dao'
+    renderTarget()
+  }
+
+  sel.addEventListener('change', renderTarget)
+  const iv = setInterval(refresh, 2000)
+  refresh()
 }

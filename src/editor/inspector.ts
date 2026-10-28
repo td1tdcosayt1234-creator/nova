@@ -147,6 +147,12 @@ function renderEntity(ed: Editor, root: HTMLElement, e: Entity) {
     ed.selection = c.id
     ed.refreshAll()
   })
+  const foc = document.createElement('button')
+  foc.className = 'btn'
+  foc.style.flex = '1'
+  foc.textContent = '🎯 Focus'
+  foc.title = 'Center the camera on this entity (shortcut: F)'
+  foc.addEventListener('click', () => ed.focusSelection())
   const del = document.createElement('button')
   del.className = 'btn danger'
   del.style.flex = '1'
@@ -157,7 +163,7 @@ function renderEntity(ed: Editor, root: HTMLElement, e: Entity) {
     ed.refreshAll()
     ed.log('warn', `Deleted "${e.name}"`)
   })
-  act.append(dup, del)
+  act.append(dup, foc, del)
   root.appendChild(act)
 }
 
@@ -313,6 +319,19 @@ function rowCode(label: string, value: string, onChange: (v: string) => void): H
   i.spellcheck = false
   i.value = value
   i.addEventListener('change', () => onChange(i.value))
+  i.addEventListener('keydown', ev => {
+    ev.stopPropagation()
+    if (ev.key === 'Tab') {
+      ev.preventDefault()
+      const s = i.selectionStart ?? i.value.length
+      const e = i.selectionEnd ?? s
+      i.value = i.value.slice(0, s) + '  ' + i.value.slice(e)
+      i.selectionStart = i.selectionEnd = s + 2
+      onChange(i.value)
+    } else if (ev.key === 'Escape') {
+      i.blur()
+    }
+  })
   row.append(l, i)
   return row
 }

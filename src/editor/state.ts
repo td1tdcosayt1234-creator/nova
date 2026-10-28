@@ -30,6 +30,7 @@ export interface Editor {
   applyMode(): void
   log(level: LogLevel, msg: string): void
   resetCameras(): void
+  focusSelection(): void
 }
 
 export function selectedEntity(ed: Editor): Entity | null {

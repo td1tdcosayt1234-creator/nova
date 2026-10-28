@@ -10,11 +10,13 @@ import { Physics3D, rapierReady } from './engine/physics3d'
 import { applySceneSpec, specToEntity, type SceneSpec, type EntitySpec } from './engine/spec'
 import { blank2D, blank3D } from './editor/blank'
 import { buildGame, aiAssistant, localAssistant, loadAISettings, aiConfigured, normalizeSettings, type ChatMsg } from './editor/ai/builder'
-import { buildUI, menubarButton, modal, openSettingsModal, openDocsModal, showWelcome, activateTab, type MenuItem, type UIRefs } from './editor/ui'
+import { buildUI, menubarButton, modal, closeAllModals, openSettingsModal, openAgentsModal, openDocsModal, openShortcutsModal, activateTab, type MenuItem, type UIRefs } from './editor/ui'
 import { initHierarchy, renderHierarchy } from './editor/hierarchy'
 import { initInspector, renderInspector } from './editor/inspector'
 import { initConsole, type ConsolePanel } from './editor/console'
 import { initGizmo } from './editor/gizmo'
+import { buildHome, NOVA_VERSION, type Home } from './editor/home'
+import { createProject as storeCreate, getProject, saveProjectEntry, deleteProject as storeDelete, type NovaProject } from './editor/projects'
 import type { Editor, LogLevel } from './editor/state'
 
 /* ---------- boot ---------- */
@@ -42,7 +44,8 @@ const editor: Editor = {
   refreshAll() { this.refreshHierarchy(); this.refreshInspector() },
   applyMode: () => applyMode(),
   log: (l, m) => cons.log(l, m),
-  resetCameras: () => resetCameras()
+  resetCameras: () => resetCameras(),
+  focusSelection: () => focusSelection()
 }
 
 const r2d = new Renderer2D(ui.vp2d)
@@ -138,6 +141,195 @@ editor.host.hooks.burst = (entityId, n) => {
 
 /* ---------- console ---------- */
 cons = initConsole(editor, ui.console.logEl, ui.console.clear)
+
+/* ---------- Nova Bridge (external AI agents) ---------- */
+
+const bridgeConsole: Array<{ t: string; level: LogLevel; msg: string }> = []
+const baseEditorLog = editor.log.bind(editor)
+editor.log = (l, m) => {
+  baseEditorLog(l, m)
+  bridgeConsole.push({ t: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }), level: l, msg: m })
+  if (bridgeConsole.length > 200) bridgeConsole.splice(0, bridgeConsole.length - 200)
+}
+
+let bridgePushT: ReturnType<typeof setTimeout> | null = null
+
+function bridgePush() {
+  const nova = (window as any).nova
+  if (!nova?.pushBridgeState) return
+  try {
+    const ents = editor.scene.entities.map(e => ({
+      id: e.id,
+      name: e.name,
+      tags: e.tags,
+      visible: e.visible,
+      pos: { x: Math.round(e.transform.pos.x * 10) / 10, y: Math.round(e.transform.pos.y * 10) / 10, z: Math.round(e.transform.pos.z * 10) / 10 },
+      comps: e.comps.map(c => ({ type: c.type })),
+      scripted: e.comps.some(c => c.type === 'script')
+    }))
+    void nova.pushBridgeState({
+      inHome: appEl.classList.contains('editorhidden'),
+      playing: editor.playing,
+      paused: editor.paused,
+      scene: JSON.parse(serializeScene(editor.scene)),
+      entities: ents,
+      selection: editor.selection
+        ? (editor.scene.entities.find(e2 => e2.id === editor.selection)?.name ?? null)
+        : null,
+      console: bridgeConsole
+    })
+  } catch { /* quota / serialize fail — bridge state stale theke jabe */ }
+}
+
+function scheduleBridgePush() {
+  if (bridgePushT) return
+  bridgePushT = setTimeout(() => { bridgePushT = null; bridgePush() }, 400)
+}
+
+const baseRefreshAll = editor.refreshAll.bind(editor)
+editor.refreshAll = () => { baseRefreshAll(); scheduleBridgePush() }
+
+const bridgeApi = (window as any).nova
+if (bridgeApi?.onBridgeCommand) {
+  bridgeApi.onBridgeCommand((cmd: { type: string; spec?: SceneSpec }) => {
+    try {
+      if (cmd.type === 'run') {
+        if (appEl.classList.contains('editorhidden')) { editor.log('warn', '🔗 Bridge: engine Home e ache — age project khulte hobe'); return }
+        if (!editor.playing) void startPlay()
+      } else if (cmd.type === 'stop') {
+        stopPlay()
+      } else if (cmd.type === 'set_scene') {
+        if (editor.playing) { editor.log('warn', '🔗 Bridge: play cholche — age stop_scene dao'); return }
+        if (!cmd.spec || typeof cmd.spec !== 'object') throw new Error('valid SceneSpec deya hoyni')
+        loadScene(applySceneSpec(cmd.spec as SceneSpec), 'AI agent (bridge)')
+        editor.log('ok', `🔗 Bridge: scene set — ${(cmd.spec as any).entities?.length || 0} entities`)
+      }
+      scheduleBridgePush()
+    } catch (err) {
+      editor.log('err', `🔗 Bridge command "${cmd.type}" failed: ${String(err)}`)
+    }
+  })
+  setInterval(scheduleBridgePush, 4000)
+}
+
+/* ---------- project session ---------- */
+
+let currentProjectId: string | null = null
+const appEl = document.getElementById('app')!
+let home: Home | null = null
+
+function updateTitle() {
+  ui.titleEl.textContent = `— ${editor.scene.meta.name} (${editor.scene.meta.mode.toUpperCase()})`
+}
+
+function setSaved(text: string) {
+  ui.status.saved.textContent = text
+}
+
+/** sync the open scene into the project store */
+function flushProject(uiFeedback = true) {
+  if (!currentProjectId) return
+  const m = editor.scene.meta
+  saveProjectEntry(currentProjectId, m.name, m.mode, serializeScene(editor.scene))
+  if (uiFeedback) setSaved(`Saved ✓ ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`)
+}
+
+function enterEditor() {
+  appEl.classList.remove('editorhidden')
+  home?.hide()
+  closeAllModals()
+  editor.refreshAll()
+  editor.applyMode()
+  editor.resetCameras()
+  updateTitle()
+  setSaved('⏳ autosaving every 15s')
+}
+
+function returnHome() {
+  if (editor.playing) stopPlay()
+  editor.selection = null
+  flushProject()
+  appEl.classList.add('editorhidden')
+  home?.show()
+}
+
+function newProject(mode: '2d' | '3d', name: string) {
+  const spec = mode === '2d' ? blank2D() : blank3D()
+  const scene = applySceneSpec(spec)
+  scene.meta.name = name
+  editor.scene = scene
+  editor.selection = null
+  const entry = storeCreate(name, mode, serializeScene(scene))
+  currentProjectId = entry.id
+  enterEditor()
+  editor.log('ok', `🆕 New ${mode.toUpperCase()} project "${name}" — physics: ${mode === '2d' ? 'Planck (Box2D)' : 'Rapier'}`)
+}
+
+function openProjectEntry(p: NovaProject) {
+  try {
+    const scene = deserializeScene(p.scene)
+    editor.scene = scene
+    editor.selection = null
+    currentProjectId = p.id
+    enterEditor()
+    editor.log('ok', `📂 Project "${p.name}" khola holo (${scene.entities.length} entities, ${scene.meta.mode.toUpperCase()})`)
+    statusAI()
+  } catch (err) {
+    editor.log('err', 'Project load failed: ' + String(err))
+  }
+}
+
+function continueAutosave() {
+  const saved = localStorage.getItem(AUTO)
+  if (!saved) return
+  try {
+    const scene = deserializeScene(saved)
+    editor.scene = scene
+    editor.selection = null
+    const meta = scene.meta
+    const entry = storeCreate(meta.name, meta.mode, saved)
+    currentProjectId = entry.id
+    enterEditor()
+    editor.log('ok', `💾 Autosave theke "${meta.name}" khola holo`)
+  } catch (err) {
+    editor.log('err', 'Autosave load failed: ' + String(err))
+  }
+}
+
+async function importFile() {
+  const nova = (window as any).nova
+  if (nova?.open) {
+    const res = await nova.open()
+    if (!res) { editor.log('info', 'Open cancelled'); return }
+    if (res.error) { editor.log('err', 'Open failed: ' + res.error); return }
+    importSceneText(res.content, res.name)
+  } else {
+    const inp = document.createElement('input')
+    inp.type = 'file'
+    inp.accept = '.nova,.json'
+    inp.onchange = () => {
+      const f = inp.files?.[0]
+      if (!f) return
+      f.text().then(t => importSceneText(t, f.name))
+    }
+    inp.click()
+  }
+}
+
+/** load a .nova/.json file into the editor as a fresh project */
+function importSceneText(text: string, name: string) {
+  try {
+    const scene = deserializeScene(text)
+    editor.scene = scene
+    editor.selection = null
+    const entry = storeCreate(scene.meta.name || name.replace(/\.nova$/i, ''), scene.meta.mode, serializeScene(scene))
+    currentProjectId = entry.id
+    enterEditor()
+    editor.log('ok', `📂 Imported "${entry.name}" (${scene.entities.length} entities)`)
+  } catch (err) {
+    editor.log('err', 'Import failed: ' + String(err))
+  }
+}
 
 /* ---------- play / pause / stop ---------- */
 
@@ -402,6 +594,8 @@ function loadScene(scene: Scene, label: string) {
   editor.refreshAll()
   editor.applyMode()
   editor.resetCameras()
+  updateTitle()
+  flushProject(false)
   editor.log('ok', `Scene loaded: ${label} (${scene.entities.length} entities, ${scene.meta.mode.toUpperCase()})`)
   statusAI()
 }
@@ -417,6 +611,7 @@ function currentSpec(): SceneSpec {
 /* ---------- file ops ---------- */
 
 async function saveProject() {
+  flushProject()
   const content = serializeScene(editor.scene)
   const nova = (window as any).nova
   if (nova?.save) {
@@ -454,7 +649,7 @@ async function openProject() {
   }
 }
 
-function newProject() {
+function newSceneModal() {
   const { body } = modal('🆕 New Scene', 'Kon mode e notun scene banabo?')
   const row = document.createElement('div')
   row.style.display = 'flex'
@@ -474,7 +669,7 @@ function newProject() {
 /* ---------- menus ---------- */
 
 menubarButton(ui.topbar, 'File', [
-  { label: '🆕 New Scene', hint: '', action: newProject },
+  { label: '🆕 New Scene', hint: '', action: newSceneModal },
   { label: '📂 Open Project', action: openProject },
   { label: '💾 Save Project', hint: 'Ctrl+S', action: saveProject }
 ])
@@ -488,6 +683,7 @@ menubarButton(ui.topbar, 'AI', [
 ])
 
 menubarButton(ui.topbar, 'Help', [
+  { label: '🔗 AI Agents (OpenCode · Kilo · Kiro…)', action: () => openAgentsModal() },
   { label: '📘 Scripting & AI Guide', action: openDocsModal },
   { label: 'ℹ️ About Nova', action: () => {
     const { body } = modal('Nova Engine', 'AI-first 2D & 3D game engine')
@@ -720,46 +916,150 @@ ui.assetShuffle.addEventListener('click', () => {
 })
 renderAssets()
 
-/* ---------- autosave + boot ---------- */
+/* ---------- autosave ---------- */
 
 const AUTO = 'nova.autosave'
 setInterval(() => {
-  if (!editor.playing) {
-    try { localStorage.setItem(AUTO, serializeScene(editor.scene)) } catch { /* quota */ }
-  }
+  if (editor.playing) return
+  if (appEl.classList.contains('editorhidden')) return   // home screen theke dur
+  try {
+    localStorage.setItem(AUTO, serializeScene(editor.scene))
+    flushProject(false)
+  } catch { /* quota */ }
 }, 15000)
 
-const saved = localStorage.getItem(AUTO)
-const savedScene = saved ? (() => { try { return deserializeScene(saved) } catch { return null } })() : null
+/* ---------- editor topbar wiring ---------- */
 
-if (savedScene) {
-  loadScene(savedScene, 'autosave')
-} else {
-  loadSpec(blank2D(), 'Untitled 2D')
+ui.homeBtn.addEventListener('click', returnHome)
+ui.saveBtn.addEventListener('click', saveProject)
+
+/* ---------- global keyboard: Esc / F / G / Del / Ctrl+D ---------- */
+
+window.addEventListener('keydown', ev => {
+  const t = document.activeElement as HTMLElement | null
+  const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+  if (typing) return
+
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
+    ev.preventDefault()
+    const e = editor.scene.entities.find(x => x.id === editor.selection)
+    if (e) {
+      const c = editor.scene.cloneEntity(e)
+      editor.selection = c.id
+      editor.refreshAll()
+      editor.log('ok', `⧉ Duplicated "${e.name}"`)
+    }
+    return
+  }
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && !editor.playing) {
+    const e = editor.scene.entities.find(x => x.id === editor.selection)
+    if (e) {
+      editor.scene.remove(e.id)
+      editor.selection = null
+      editor.refreshAll()
+      editor.log('warn', `🗑 Deleted "${e.name}"`)
+    }
+    return
+  }
+  if (ev.code === 'KeyF' && !editor.playing) { focusSelection(); return }
+  if (ev.code === 'KeyG' && !editor.playing) {
+    r2d.gridVisible = !r2d.gridVisible
+    editor.log('info', `▦ Grid ${r2d.gridVisible ? 'on' : 'off'}`)
+    return
+  }
+  if (ev.key === 'Escape') {
+    if (editor.playing) stopPlay()
+    else {
+      editor.selection = null
+      editor.refreshInspector()
+      editor.refreshHierarchy()
+    }
+  }
+})
+
+/* ---------- camera focus (F) ---------- */
+
+function focusSelection() {
+  const e = editor.scene.entities.find(x => x.id === editor.selection)
+  if (!e) { editor.log('info', '🎯 Focus: age kono entity select koro'); return }
+  const p = e.transform.pos
+  if (editor.scene.meta.mode === '3d') {
+    editor.orbit.target = { x: p.x, y: p.y, z: p.z } as any
+  } else {
+    editor.cam2dEdit.x = p.x
+    editor.cam2dEdit.y = p.y
+  }
+  editor.log('info', `🎯 Camera focused on "${e.name}"`)
 }
+
+/* ---------- About modal (home) ---------- */
+
+function openAbout() {
+  const { body } = modal('Nova Engine', `v${NOVA_VERSION} — AI-first 2D & 3D game engine`)
+  body.innerHTML = `<div class="doc">
+  <p><b>Nova Engine</b> — ekta AI-first 2D/3D game engine, real physics er sathe:</p>
+  <p>• <b>2D</b> — Canvas2D renderer + <b>Planck.js (Box2D)</b> physics: rotation, friction, bounce, sensors<br>
+  • <b>3D</b> — WebGL (three.js) renderer + <b>Rapier (Rust/WASM)</b> physics: box/sphere/capsule colliders, contacts<br>
+  • <b>AI Builder</b> — LLM key connect korle prompt theke puro game generate<br>
+  • <b>Editor</b> — hierarchy, inspector, play mode, console, scripts</p>
+  <p style="color:var(--muted)">Planck.js · three.js · Rapier WASM · esbuild · Electron</p></div>`
+}
+
+/* ---------- viewport tools (zoom) ---------- */
+
+function buildVpTools(): HTMLElement {
+  const box = document.createElement('div')
+  box.className = 'vp-tools'
+  const zLbl = document.createElement('span')
+  zLbl.className = 'vpzoom'
+  zLbl.textContent = '100%'
+  const upd = () => {
+    zLbl.textContent = editor.scene.meta.mode === '3d'
+      ? Math.round(editor.orbit.dist) + 'u'
+      : Math.round(editor.cam2dEdit.zoom * 100) + '%'
+  }
+  const b = (label: string, title: string, fn: () => void) => {
+    const btn = document.createElement('button')
+    btn.textContent = label
+    btn.title = title
+    btn.addEventListener('click', () => { fn(); upd() })
+    box.appendChild(btn)
+    return btn
+  }
+  b('+', 'Zoom in', () => {
+    if (editor.scene.meta.mode === '3d') editor.orbit.dist = Math.max(4, editor.orbit.dist / 1.25)
+    else editor.cam2dEdit.zoom = Math.min(6, editor.cam2dEdit.zoom * 1.25)
+  })
+  b('−', 'Zoom out', () => {
+    if (editor.scene.meta.mode === '3d') editor.orbit.dist = Math.min(160, editor.orbit.dist * 1.25)
+    else editor.cam2dEdit.zoom = Math.max(0.15, editor.cam2dEdit.zoom / 1.25)
+  })
+  b('⟲', 'Reset camera', () => { resetCameras(); upd() })
+  box.appendChild(zLbl)
+  upd()
+  return box
+}
+ui.vpWrap.appendChild(buildVpTools())
+
+/* ---------- boot: home first, editor hidden ---------- */
+
+home = buildHome(document.body, {
+    createProject: newProject,
+    openProject: id => { const p = getProject(id); if (p) openProjectEntry(p) },
+    continueAutosave,
+  importFile,
+  openAI: () => openSettingsModal(statusAI),
+  openAgents: () => openAgentsModal(),
+  openDocs: openDocsModal,
+  openShortcuts: openShortcutsModal,
+  openAbout
+})
+
+appEl.classList.add('editorhidden')
+home.show()
 
 statusAI()
 updatePlayUI()
-openDocsModalOnce()
-void openDocsModalOnce
-
-function openDocsModalOnce() { /* no-op: docs available from Help menu */ }
-
-/* ---------- welcome ---------- */
-
-showWelcome(!!savedScene, key => {
-  if (key === 'builder') {
-    activateTab('builder')
-    ui.builder.prompt.focus()
-  } else if (key === 'continue' && savedScene) {
-    // already loaded
-    editor.log('info', 'Continued from autosave')
-  } else if (key === 'blank2d') {
-    loadSpec(blank2D(), 'Untitled 2D')
-  } else if (key === 'blank3d') {
-    loadSpec(blank3D(), 'Untitled 3D')
-  }
-})
 
 function statusAI() {
   const s = loadAISettings()

@@ -1,6 +1,6 @@
 /* ============ Nova Engine — AI providers (Bring-Your-Own-Key) ============ */
 
-export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama'
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'openrouter' | 'groq' | 'ollama' | 'custom'
 
 export interface AISettings {
   provider: ProviderKind
@@ -41,6 +41,22 @@ export const PROVIDER_INFO: Record<ProviderKind, {
     models: ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'],
     note: 'aistudio.google.com/apikey theke free key pao.'
   },
+  openrouter: {
+    label: 'OpenRouter (300+ models)',
+    needsKey: true,
+    defaultBase: 'https://openrouter.ai/api/v1',
+    defaultModel: 'anthropic/claude-3.5-sonnet',
+    models: ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o-mini', 'deepseek/deepseek-chat', 'meta-llama/llama-3.1-8b-instruct'],
+    note: 'openrouter.ai/keys theke key nao — ek key diye sob model.'
+  },
+  groq: {
+    label: 'Groq (ultra fast)',
+    needsKey: true,
+    defaultBase: 'https://api.groq.com/openai/v1',
+    defaultModel: 'llama-3.1-8b-instant',
+    models: ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'qwen2.5-coder-32b'],
+    note: 'console.groq.com/keys theke free key pao.'
+  },
   ollama: {
     label: 'Ollama (Local)',
     needsKey: false,
@@ -48,6 +64,14 @@ export const PROVIDER_INFO: Record<ProviderKind, {
     defaultModel: 'llama3.1',
     models: ['llama3.1', 'qwen2.5-coder', 'mistral', 'phi3'],
     note: 'Local e cholle — key lagbe na. Ollama chalu thakte hobe.'
+  },
+  custom: {
+    label: 'Custom (OpenAI-compatible)',
+    needsKey: false,
+    defaultBase: 'http://localhost:8080/v1',
+    defaultModel: 'default',
+    models: ['default'],
+    note: 'Jekono OpenAI-compatible server (vLLM, LM Studio, LM, LiteLLM...) — Base URL set koro.'
   }
 }
 

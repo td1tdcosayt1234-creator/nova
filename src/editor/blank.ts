@@ -270,6 +270,94 @@ if (self.pos.y < -30) { self.pos.x = 0; self.pos.y = 1.2; self.pos.z = 0; self.v
   }
 }
 
+/* ---------- presets (hierarchy ＋ menu) ---------- */
+
+export type PresetKey =
+  | 'player2d' | 'ground2d' | 'crate2d' | 'coin2d' | 'platform2d' | 'movingPlatform' | 'enemy2d'
+  | 'player3d' | 'ground3d' | 'crate3d' | 'wall3d' | 'gem3d' | 'tree3d' | 'lightSun'
+
+export function presetList(mode: '2d' | '3d'): Array<{ key: PresetKey; label: string; icon: string }> {
+  return mode === '2d'
+    ? [
+        { key: 'player2d', label: 'Player (platformer)', icon: '🎮' },
+        { key: 'ground2d', label: 'Ground', icon: '🧱' },
+        { key: 'platform2d', label: 'Platform', icon: '▬' },
+        { key: 'movingPlatform', label: 'Moving Platform', icon: '↔' },
+        { key: 'crate2d', label: 'Crate (dynamic)', icon: '📦' },
+        { key: 'coin2d', label: 'Coin (collectible)', icon: '🪙' },
+        { key: 'enemy2d', label: 'Enemy (patrol)', icon: '👾' }
+      ]
+    : [
+        { key: 'player3d', label: 'Player (3D)', icon: '🎮' },
+        { key: 'ground3d', label: 'Ground plane', icon: '🟩' },
+        { key: 'crate3d', label: 'Crate (dynamic)', icon: '📦' },
+        { key: 'wall3d', label: 'Wall (static)', icon: '🧱' },
+        { key: 'gem3d', label: 'Gem (collectible)', icon: '💎' },
+        { key: 'tree3d', label: 'Tree', icon: '🌲' },
+        { key: 'lightSun', label: 'Sun light', icon: '💡' }
+      ]
+}
+
+export function presetSpec(key: PresetKey, mode: '2d' | '3d'): EntitySpec {
+  switch (key) {
+    case 'player2d':
+      return {
+        name: 'Player', tags: ['player'], pos: [0, 60, 4],
+        comps: [
+          { type: 'sprite2d', sprite: 'player', w: 36, h: 46, seed: 7, color: '#ef476f', screen: false },
+          { type: 'body2d', gravityScale: 1, w: 30, h: 44, friction: 0.05 },
+          {
+            type: 'script', code: `// Player controller (2D platformer)
+var SP = 240
+if (engine.input.down("KeyA") || engine.input.down("ArrowLeft")) self.vel.x = -SP
+else if (engine.input.down("KeyD") || engine.input.down("ArrowRight")) self.vel.x = SP
+else self.vel.x = 0
+if ((engine.input.pressed("Space") || engine.input.pressed("ArrowUp") || engine.input.pressed("KeyW")) && self.onGround) self.vel.y = 660`
+          }
+        ]
+      }
+    case 'ground2d':
+      return {
+        name: 'Ground', tags: ['ground'], pos: [0, -40, 1],
+        comps: [
+          { type: 'sprite2d', sprite: 'brick', w: 600, h: 80, seed: 9, color: '#8b7355', screen: false },
+          { type: 'body2d', isStatic: true, w: 600, h: 80, friction: 0.3 }
+        ]
+      }
+    case 'platform2d':
+      return platform(Math.round(-200 + Math.random() * 400), 80, 180, '#8b5cf6', Math.floor(Math.random() * 9999))
+    case 'movingPlatform':
+      return movingPlatform(Math.round(-200 + Math.random() * 400), 140, 140, '#10b981', Math.floor(Math.random() * 9999))
+    case 'crate2d':
+      return crate2D(Math.round(-300 + Math.random() * 600), 120, Math.floor(Math.random() * 9999))
+    case 'coin2d':
+      return coin2D(Math.round(-300 + Math.random() * 600), 80 + Math.random() * 120, Math.floor(Math.random() * 9999))
+    case 'enemy2d':
+      return enemyPatrol(Math.round(-250 + Math.random() * 500), 30, 55, Math.floor(Math.random() * 9999))
+    case 'player3d':
+      return playerEntity3D(0, 1.2, '#f97316')
+    case 'ground3d':
+      return {
+        name: 'Ground', tags: ['ground'], pos: [0, 0, 0], scale: [50, 1, 50],
+        comps: [{ type: 'mesh3d', geo: 'plane', color: '#334155', texture: 'none', wire: false }]
+      }
+    case 'crate3d':
+      return crate3D(Math.round(-14 + Math.random() * 28), Math.round(-14 + Math.random() * 28), Math.floor(Math.random() * 9999))
+    case 'wall3d':
+      return wall3D(Math.round(-14 + Math.random() * 28), Math.round(-14 + Math.random() * 28))
+    case 'gem3d':
+      return gem3D(Math.round(-14 + Math.random() * 28), Math.round(-14 + Math.random() * 28), Math.floor(Math.random() * 9999))
+    case 'tree3d':
+      return tree3D(Math.round(-14 + Math.random() * 28), Math.round(-14 + Math.random() * 28))[0]
+    case 'lightSun':
+      return {
+        name: 'Sunlight', pos: [18, 30, 12],
+        comps: [{ type: 'light3d', kind: 'sun', color: '#ffffff', intensity: 1.35, distance: 0 }]
+      }
+  }
+  void mode
+}
+
 export function blank3D(): SceneSpec {
   return {
     name: 'Untitled 3D', mode: '3d', useGradient: true,

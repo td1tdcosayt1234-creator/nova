@@ -13,6 +13,7 @@ export class Renderer2D {
   private active: Particle[] = []
   private pending: Particle[][] = []
   lastDt = 0.016
+  gridVisible = true
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -97,7 +98,7 @@ export class Renderer2D {
     ctx.fillRect(0, 0, cw, ch)
 
     if (!opts.hud) {
-      if (opts.editor) this.drawGrid(cam, cw, ch)
+      if (opts.editor && this.gridVisible) this.drawGrid(cam, cw, ch)
 
       const ents = scene.entities
         .filter(e => e.visible && !getComp(e, 'text2d'))
